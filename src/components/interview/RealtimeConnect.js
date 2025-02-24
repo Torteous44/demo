@@ -1,32 +1,36 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import AudioVisualizer from './AudioVisualizer';
-import '../../styles/RealtimeConnect.css';
+import AudioVisualizer from "./AudioVisualizer";
+import "../../styles/RealtimeConnect.css";
 
 function RealtimeConnect() {
   const { sessionId: urlSessionId } = useParams();
-  // eslint-disable-next-line no-unused-vars
-  const [sessionId, setSessionId] = useState(urlSessionId || "");
+  const [sessionId] = useState(urlSessionId || "");
   const [log, setLog] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [timer, setTimer] = useState(0);
-  const [mediaStream, setMediaStream] = useState(null);
+  // remoteStream for playback/visualization
+  const [remoteStream, setRemoteStream] = useState(null);
+  // localStream is the microphone stream we send
+  const [localStream, setLocalStream] = useState(null);
   const [interviewTitle, setInterviewTitle] = useState("Interview Session");
   const audioRef = useRef(null);
-  // eslint-disable-next-line no-unused-vars
-  const timerRef = useRef(null);
   const peerConnection = useRef(null);
   const navigate = useNavigate();
   const [volume, setVolume] = useState(1);
+  // Prevent duplicate connection attempts (e.g., React StrictMode)
+  const connectionInitiated = useRef(false);
+  // AudioContext and gain node refs for routing remote audio
+  const audioContextRef = useRef(null);
+  const gainNodeRef = useRef(null);
 
   const appendLog = useCallback((msg) => {
     console.log("Log:", msg);
     setLog((prev) => prev + "\n" + msg);
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleConnect = useCallback(async () => {
     if (!sessionId) {
       appendLog("No session ID provided");
@@ -41,9 +45,12 @@ function RealtimeConnect() {
     }
 
     try {
-      // Stop any existing streams
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
+      // Cleanup any previous streams/connections
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+      }
+      if (remoteStream) {
+        remoteStream.getTracks().forEach((track) => track.stop());
       }
       if (peerConnection.current) {
         peerConnection.current.close();
@@ -51,167 +58,207 @@ function RealtimeConnect() {
       if (audioRef.current) {
         audioRef.current.srcObject = null;
       }
+      if (audioContextRef.current) {
+        await audioContextRef.current.close();
+        audioContextRef.current = null;
+        gainNodeRef.current = null;
+      }
 
-      setIsConnected(true);
-      
       // 1) Get ephemeral token
       appendLog("Fetching ephemeral token...");
-      const rtResp = await fetch(`https://demobackend-p2e1.onrender.com/realtime/token?session_id=${sessionId}`, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const rtResp = await fetch(
+        `https://demobackend-p2e1.onrender.com/realtime/token?session_id=${sessionId}`,
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
       if (!rtResp.ok) throw new Error("Failed to get ephemeral token");
       const rtData = await rtResp.json();
       const ephemeralKey = rtData.client_secret.value;
       appendLog("Got ephemeral key: " + ephemeralKey.substring(0, 15) + "...");
-      
+
       // 2) Create RTCPeerConnection
       appendLog("Creating RTCPeerConnection...");
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
       });
-      
+
       pc.onconnectionstatechange = () => {
         appendLog(`Connection state changed: ${pc.connectionState}`);
       };
-      
       pc.oniceconnectionstatechange = () => {
         appendLog(`ICE connection state: ${pc.iceConnectionState}`);
       };
-      
       pc.onicegatheringstatechange = () => {
         appendLog(`ICE gathering state: ${pc.iceGatheringState}`);
       };
-      
       pc.onsignalingstatechange = () => {
         appendLog(`Signaling state: ${pc.signalingState}`);
       };
 
-      // 3) Add audio track
-      appendLog("Adding user audio track...");
-      const newStream = await navigator.mediaDevices.getUserMedia({ 
+      // 3) Get local audio stream and add its tracks
+      appendLog("Getting user audio track...");
+      const userStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
-        } 
+          autoGainControl: true,
+        },
       });
-      
-      newStream.getTracks().forEach(track => {
+      userStream.getTracks().forEach((track) => {
         track.enabled = !isMuted;
-        pc.addTrack(track, newStream);
       });
-      
-      // 4) Handle incoming audio
+      setLocalStream(userStream);
+      userStream.getTracks().forEach((track) => {
+        pc.addTrack(track, userStream);
+      });
+
+      // 4) Handle incoming remote audio track
       pc.ontrack = (evt) => {
-        appendLog("🎵 Track received: " + evt.track.kind);
+        appendLog("🎵 Remote track received: " + evt.track.kind);
         if (evt.track.kind === "audio") {
-          appendLog("Setting up audio playback...");
           try {
-            const stream = evt.streams[0];
-            appendLog(`Stream ID: ${stream.id}`);
-            appendLog(`Stream active: ${stream.active}`);
-            appendLog(`Audio tracks: ${stream.getAudioTracks().length}`);
-            
+            const incomingStream = evt.streams[0];
+            appendLog(`Remote stream ID: ${incomingStream.id}`);
+            appendLog(`Remote stream active: ${incomingStream.active}`);
+            appendLog(
+              `Audio tracks count: ${incomingStream.getAudioTracks().length}`
+            );
+            setRemoteStream(incomingStream);
+
+            // Create or resume AudioContext for routing remote audio
+            if (!audioContextRef.current) {
+              const AudioContext =
+                window.AudioContext || window.webkitAudioContext;
+              audioContextRef.current = new AudioContext();
+            }
+            const audioCtx = audioContextRef.current;
+            if (audioCtx.state === "suspended") {
+              audioCtx.resume();
+            }
+            const source = audioCtx.createMediaStreamSource(incomingStream);
+            // Create a gain node (store it in a ref for volume control)
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = volume;
+            gainNodeRef.current = gainNode;
+            source.connect(gainNode).connect(audioCtx.destination);
+            appendLog("Audio routed via AudioContext.");
+
+            // Also set up the audio element for fallback/visualization.
             if (audioRef.current) {
-              // Reset audio element
               audioRef.current.srcObject = null;
               audioRef.current.load();
-              
-              // Configure audio element
-              audioRef.current.srcObject = stream;
+              audioRef.current.srcObject = incomingStream;
               audioRef.current.volume = volume;
               audioRef.current.muted = false;
-              
-              // Play audio
               const playPromise = audioRef.current.play();
               if (playPromise !== undefined) {
                 playPromise
                   .then(() => {
-                    appendLog("Playback started successfully");
-                    // Double-check volume and muted state
-                    audioRef.current.volume = volume;
-                    audioRef.current.muted = false;
+                    appendLog(
+                      "Playback started successfully (audio element)."
+                    );
                   })
-                  .catch(err => {
-                    appendLog(`Play failed: ${err.message}`);
-                    // Try to recover
+                  .catch((err) => {
+                    appendLog(
+                      `Audio element play failed: ${err.message}`
+                    );
                     setTimeout(() => {
                       audioRef.current.play().catch(console.error);
                     }, 1000);
                   });
               }
             }
-            setMediaStream(stream);
           } catch (err) {
             appendLog(`Audio setup error: ${err.message}`);
-            console.error('Audio setup error:', err);
+            console.error("Audio setup error:", err);
           }
         }
       };
 
-      // 5) Create and send offer
+      // 5) Create and send SDP offer using the mini realtime model
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       appendLog("Local SDP offer created.");
-      
+
+      // Use the mini realtime model
+      const model = "gpt-4o-mini-realtime-preview-2024-12-17";
       const baseUrl = "https://api.openai.com/v1/realtime";
-      const model = "gpt-4o-realtime-preview-2024-12-17";
       const sdpResp = await fetch(`${baseUrl}?model=${model}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${ephemeralKey}`,
-          "Content-Type": "application/sdp"
+          "Content-Type": "application/sdp",
         },
-        body: offer.sdp
+        body: offer.sdp,
       });
-      if (!sdpResp.ok) throw new Error("OpenAI Realtime handshake failed");
+      if (!sdpResp.ok)
+        throw new Error("OpenAI Realtime handshake failed");
       const answerSDP = await sdpResp.text();
       appendLog("Received SDP answer from OpenAI.");
-      
+
       await pc.setRemoteDescription({ type: "answer", sdp: answerSDP });
       appendLog("Remote SDP set.");
-      
+
       peerConnection.current = pc;
+      setIsConnected(true);
       appendLog("Setup complete - waiting for audio...");
-      
     } catch (err) {
       appendLog(`Connection error: ${err.message}`);
       console.error("Connection error:", err);
       setIsConnected(false);
     }
-  }, [sessionId, isMuted, volume, appendLog, mediaStream]);
+  }, [sessionId, isMuted, appendLog, localStream, remoteStream, volume]);
 
   useEffect(() => {
-    if (urlSessionId) {
+    if (urlSessionId && !connectionInitiated.current) {
+      connectionInitiated.current = true;
       handleConnect();
     }
-  }, [urlSessionId, handleConnect]);
+    return () => {
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+      }
+      if (remoteStream) {
+        remoteStream.getTracks().forEach((track) => track.stop());
+      }
+      if (peerConnection.current) {
+        peerConnection.current.close();
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+        gainNodeRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlSessionId]);
 
   useEffect(() => {
     let interval;
     if (isConnected) {
       interval = setInterval(() => {
-        setTimer(prev => prev + 1);
+        setTimer((prev) => prev + 1);
       }, 1000);
     }
     return () => clearInterval(interval);
   }, [isConnected]);
 
-  // Fetch interview title
   useEffect(() => {
     const fetchInterviewDetails = async () => {
       try {
-        const token = localStorage.getItem('token');
-        const response = await fetch(`https://demobackend-p2e1.onrender.com/sessions/${sessionId}/details`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
+        const token = localStorage.getItem("token");
+        const response = await fetch(
+          `https://demobackend-p2e1.onrender.com/sessions/${sessionId}/details`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
           }
-        });
+        );
         const data = await response.json();
         setInterviewTitle(data.interview_name || "Interview Session");
       } catch (err) {
-        console.error('Error fetching interview details:', err);
+        console.error("Error fetching interview details:", err);
       }
     };
 
@@ -223,50 +270,85 @@ function RealtimeConnect() {
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${mins.toString().padStart(2, "0")}:${secs
+      .toString()
+      .padStart(2, "0")}`;
   };
 
   const handleEndCall = async () => {
     try {
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+      }
+      if (remoteStream) {
+        remoteStream.getTracks().forEach((track) => track.stop());
       }
       if (peerConnection.current) {
         peerConnection.current.close();
       }
       setIsConnected(false);
-      navigate('/dashboard');
+      const token = localStorage.getItem("token");
+      const response = await fetch(
+        `https://demobackend-p2e1.onrender.com/sessions/${sessionId}/end`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      if (!response.ok) {
+        throw new Error("Failed to end session on server");
+      }
+      navigate("/dashboard");
     } catch (err) {
       appendLog(`End call error: ${err.message}`);
+      navigate("/dashboard");
     }
   };
 
+  // Toggle mute on local audio stream
   const handleMuteToggle = () => {
-    if (mediaStream) {
-      const audioTracks = mediaStream.getAudioTracks();
-      audioTracks.forEach(track => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach((track) => {
         track.enabled = !track.enabled;
       });
-      setIsMuted(!isMuted);
-      appendLog(`Microphone ${isMuted ? 'unmuted' : 'muted'}`);
+      setIsMuted((prev) => !prev);
+      appendLog(`Microphone ${isMuted ? "unmuted" : "muted"}`);
     }
   };
 
+  // Toggle pause/resume on local stream (stop/resume transmission)
   const handlePauseToggle = () => {
-    setIsPaused(!isPaused);
-    if (mediaStream) {
-      mediaStream.getTracks().forEach(track => {
-        track.enabled = !isPaused;
+    if (localStream) {
+      localStream.getTracks().forEach((track) => {
+        track.enabled = isPaused;
       });
+      setIsPaused((prev) => !prev);
       appendLog(isPaused ? "Resumed" : "Paused");
     }
   };
 
+  // When volume changes, update both audio element and gain node
   const handleVolumeChange = (e) => {
     const newVolume = parseFloat(e.target.value);
     setVolume(newVolume);
     if (audioRef.current) {
       audioRef.current.volume = newVolume;
+    }
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = newVolume;
+    }
+    appendLog(`Volume set to ${newVolume}`);
+  };
+
+  // Handler to resume AudioContext on user gesture if needed
+  const handleResumeAudio = () => {
+    if (audioContextRef.current && audioContextRef.current.state === "suspended") {
+      audioContextRef.current.resume().then(() => {
+        appendLog("AudioContext resumed");
+      });
     }
   };
 
@@ -278,13 +360,13 @@ function RealtimeConnect() {
 
       <div className="interview-interface">
         <div className="visualizer-container">
-          <AudioVisualizer mediaStream={mediaStream} />
+          <AudioVisualizer mediaStream={remoteStream} />
           <div className="timer">{formatTime(timer)}</div>
         </div>
-        
+
         <div className="controls">
           <button
-            className={`control-button ${isMuted ? 'active' : ''}`}
+            className={`control-button ${isMuted ? "active" : ""}`}
             onClick={handleMuteToggle}
             title={isMuted ? "Unmute" : "Mute"}
           >
@@ -300,7 +382,7 @@ function RealtimeConnect() {
           </button>
 
           <button
-            className={`control-button ${isPaused ? 'active' : ''}`}
+            className={`control-button ${isPaused ? "active" : ""}`}
             onClick={handlePauseToggle}
             title={isPaused ? "Resume" : "Pause"}
           >
@@ -315,22 +397,25 @@ function RealtimeConnect() {
               step="0.1"
               value={volume}
               onChange={handleVolumeChange}
-              style={{ width: '100px' }}
+              style={{ width: "100px" }}
             />
           </div>
+          {/* Button to manually resume AudioContext if needed */}
+          <button onClick={handleResumeAudio} className="control-button">
+            Resume Audio
+          </button>
         </div>
       </div>
-      
-      <audio 
+
+      <audio
         ref={audioRef}
-        id="aiAudio" 
+        id="aiAudio"
         autoPlay
         playsInline
         preload="auto"
-        style={{ display: 'block', width: '100%' }}
+        style={{ display: "block", width: "100%" }}
         controls
       />
-      
       <pre className="debug-log">{log}</pre>
     </div>
   );

@@ -89,9 +89,8 @@ background-color: #f4f4f4;
   filter: brightness(0) invert(1);
 }
 
-.debug-log {
-  display: none;
-}
+/* .debug-log {
+} */
 
 #aiAudio {
   display: none !important;
