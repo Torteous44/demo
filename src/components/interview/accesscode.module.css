@@ -12,7 +12,7 @@
   align-items: center;
   max-width: 600px;
   height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .content_wrapper {
@@ -21,7 +21,10 @@
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  height: 100vh;
   padding: 40px 20px;
+  position: relative;
+  overflow: hidden;
 }
 
 .main_content {
@@ -31,20 +34,23 @@
   justify-content: center;
   align-items: center;
   text-align: center;
+  overflow: hidden;
 }
 
 .access_content h1 {
   font-size: 24px;
-  font-weight: 500;
-  margin-bottom: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+
 }
 
 .access_subtitle {
-  color: #666;
-  font-size: 14px;
+  color: #313947;
+  font-size: 16px;
   margin-bottom: 32px;
   line-height: 1.5;
-  max-width: 300px;
+  max-width: 350px;
+
 }
 
 .access_subtitle strong {
@@ -80,7 +86,7 @@
   border-radius: 8px;
   font-size: 14px;
   outline: none;
-
+  font-family: inherit;
 }
 
 .access_input:focus {
