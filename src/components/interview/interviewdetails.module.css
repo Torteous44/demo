@@ -1,0 +1,142 @@
+.details_container {
+  min-height: 100vh;
+  padding: 40px;
+  position: relative;
+}
+
+.back_button {
+  position: absolute;
+  top: 40px;
+  left: 40px;
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.details_content {
+  max-width: 600px;
+  margin: 0 auto;
+  text-align: center;
+  padding-top: 40px;
+}
+
+.details_logo {
+  width: 120px;
+  margin-bottom: 40px;
+}
+
+.welcome_text {
+  color: #666;
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 16px 0 40px;
+}
+
+.interview_card {
+  background: white;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin: 32px 0;
+}
+
+.status_text {
+  color: #666;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.interview_info {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.interview_thumbnail {
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.interview_details {
+  text-align: left;
+}
+
+.interview_details h2 {
+  font-size: 18px;
+  margin-bottom: 4px;
+}
+
+.team_name {
+  color: #666;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.duration {
+  background: #f5f5f5;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #666;
+}
+
+.action_buttons {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin: 32px 0;
+}
+
+.secondary_button {
+  padding: 12px 24px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background: white;
+  color: #666;
+  cursor: pointer;
+}
+
+.primary_button {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  background: #2AA8FF;
+  color: white;
+  cursor: pointer;
+}
+
+.details_footer {
+  margin-top: 40px;
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+}
+
+.details_footer a {
+  color: #666;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.loading, .error {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.error button {
+  margin-top: 16px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  background: #2AA8FF;
+  color: white;
+  cursor: pointer;
+} 

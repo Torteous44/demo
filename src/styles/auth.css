@@ -1,0 +1,150 @@
+.auth-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background-color: white;
+}
+
+.auth-card {
+  background: white;
+  padding: 48px;
+  border-radius: 16px;
+  border: 1px solid #e0e0e0;
+  width: 100%;
+  max-width: 480px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 500px;
+}
+
+.logo-container {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 0px;
+}
+
+.logo-circle {
+  width: 48px;
+  height: 48px;
+}
+
+h1 {
+  font-size: 28px;
+  margin-bottom: 0px;
+  font-weight: 600;
+  letter-spacing: -0.09em;
+}
+
+.subtitle {
+  color: #666;
+  font-size: 14px;
+  letter-spacing: -0.05em;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: center;
+
+}
+
+.input-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 80%;
+  max-width: 320px;
+}
+
+.input-icon {
+  position: absolute;
+  left: 18px;
+  width: 12px;
+  height: 20px;
+  color: #666;
+}
+
+.auth-input {
+  width: 100%;
+  padding: 12px 16px 12px 48px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.auth-input:focus {
+  border-color: #2AA8FF;
+}
+
+.continue-button {
+  width: 80%;
+  max-width: 320px;
+  background-color: #2AA8FF;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 24px;
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 16px;
+  transition: background-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.button-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.continue-button:hover {
+  background-color: #1e95e5;
+}
+
+.error-message {
+  background-color: #ffebee;
+  color: #d32f2f;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.auth-input:disabled {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.continue-button:disabled {
+  background-color: #94d3ff;
+  cursor: not-allowed;
+}
+
+.switch-auth {
+  margin-top: 24px;
+  font-size: 14px;
+  color: #666;
+}
+
+.switch-button {
+  background: none;
+  border: none;
+  color: #2AA8FF;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 4px;
+  letter-spacing: -0.05em;
+}
+
+.switch-button:hover {
+  text-decoration: underline;
+} 

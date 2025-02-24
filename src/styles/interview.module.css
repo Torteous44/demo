@@ -1,0 +1,143 @@
+.access_page {
+  display: flex;
+  min-height: 100vh;
+}
+
+.access_content {
+  flex: 1;
+  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  max-width: 600px;
+}
+
+.content_wrapper {
+  max-width: 400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 40px 0;
+}
+
+.access_content h1 {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.access_subtitle {
+  color: #666;
+  font-size: 14px;
+  margin-bottom: 32px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.access_form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.input_group {
+  position: relative;
+  width: 100%;
+}
+
+.input_icon {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+}
+
+.access_input {
+  width: 100%;
+  padding: 12px 16px 12px 48px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+}
+
+.access_input:focus {
+  border-color: #2AA8FF;
+}
+
+.submit_button {
+  width: 100%;
+  background-color: #2AA8FF;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 24px;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.submit_button:hover {
+  background-color: #1e95e5;
+}
+
+.button_icon {
+  width: 16px;
+  height: 16px;
+}
+
+.access_footer {
+  margin-top: auto;
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+}
+
+.access_footer a {
+  color: #666;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.access_footer a:hover {
+  color: #2AA8FF;
+}
+
+.decorative_grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 1px;
+  background-color: #f5f5f5;
+  padding: 20px;
+}
+
+.grid_cell {
+  aspect-ratio: 1;
+  background-color: white;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.grid_cell:hover {
+  background-color: #2AA8FF;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .decorative_grid {
+    display: none;
+  }
+  
+  .content_wrapper {
+    padding: 20px;
+  }
+} 
