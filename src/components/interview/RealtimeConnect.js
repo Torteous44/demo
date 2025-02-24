@@ -5,6 +5,7 @@ import '../../styles/RealtimeConnect.css';
 
 function RealtimeConnect() {
   const { sessionId: urlSessionId } = useParams();
+  // eslint-disable-next-line no-unused-vars
   const [sessionId, setSessionId] = useState(urlSessionId || "");
   const [log, setLog] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -14,6 +15,7 @@ function RealtimeConnect() {
   const [mediaStream, setMediaStream] = useState(null);
   const [interviewTitle, setInterviewTitle] = useState("Interview Session");
   const audioRef = useRef(null);
+  // eslint-disable-next-line no-unused-vars
   const timerRef = useRef(null);
   const peerConnection = useRef(null);
   const navigate = useNavigate();
@@ -24,6 +26,7 @@ function RealtimeConnect() {
     setLog((prev) => prev + "\n" + msg);
   }, []);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleConnect = useCallback(async () => {
     if (!sessionId) {
       appendLog("No session ID provided");
@@ -177,7 +180,7 @@ function RealtimeConnect() {
       console.error("Connection error:", err);
       setIsConnected(false);
     }
-  }, [sessionId, isMuted, volume, appendLog]);
+  }, [sessionId, isMuted, volume, appendLog, mediaStream]);
 
   useEffect(() => {
     if (urlSessionId) {
