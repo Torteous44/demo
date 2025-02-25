@@ -51,17 +51,15 @@ export const AuthProvider = ({ children }) => {
         return { success: false, error: data.detail || "Invalid credentials" };
       }
 
+      // Store the token
       localStorage.setItem("token", data.access_token);
       
-      // Create user object since backend doesn't provide it
-      const userInfo = {
-        email: email,
-        id: Date.now(), // temporary ID
-      };
-      
-      localStorage.setItem("user_info", JSON.stringify(userInfo));
-      console.log('Setting user after login:', userInfo);
-      setUser(userInfo);
+      // Use the full user info returned by the backend
+      if (data.user) {
+        localStorage.setItem("user_info", JSON.stringify(data.user));
+        console.log('Setting user after login:', data.user);
+        setUser(data.user);
+      }
 
       return { success: true };
     } catch (err) {
@@ -127,4 +125,4 @@ export const useAuth = () => {
   return context;
 };
 
-export default AuthContext; 
+export default AuthContext;

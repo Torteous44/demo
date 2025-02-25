@@ -1,14 +1,38 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 
 function AudioVisualizer({ mediaStream }) {
   const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const [hasAudioTrack, setHasAudioTrack] = useState(false);
+  const [canvasDimensions, setCanvasDimensions] = useState({ width: 400, height: 400 });
+
+  // Resize handler to maintain square aspect ratio
+  useEffect(() => {
+    const handleResize = () => {
+      if (containerRef.current) {
+        const containerWidth = containerRef.current.clientWidth;
+        const size = Math.min(containerWidth, 400); // Cap at 400px
+        setCanvasDimensions({ width: size, height: size });
+      }
+    };
+
+    // Initial sizing
+    handleResize();
+    
+    // Add resize listener
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
-    if (!mediaStream) {
-      console.log('No media stream available');
+    // Check if mediaStream exists and has audio tracks
+    if (!mediaStream || !mediaStream.getAudioTracks || mediaStream.getAudioTracks().length === 0) {
+      console.log('No audio tracks available yet');
+      setHasAudioTrack(false);
       return;
     }
 
+    setHasAudioTrack(true);
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const analyser = audioContext.createAnalyser();
     const source = audioContext.createMediaStreamSource(mediaStream);
@@ -89,21 +113,69 @@ function AudioVisualizer({ mediaStream }) {
       analyser.disconnect();
       audioContext.close();
     };
-  }, [mediaStream]);
+  }, [mediaStream, hasAudioTrack]);
+
+  // Draw a static circle when no audio is available
+  useEffect(() => {
+    if (!hasAudioTrack && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      const WIDTH = canvas.width;
+      const HEIGHT = canvas.height;
+      const centerX = WIDTH / 2;
+      const centerY = HEIGHT / 2;
+      const radius = Math.min(WIDTH, HEIGHT) * 0.3;
+
+      // Clear canvas
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+      
+      // Draw gradient background circle
+      const gradient = ctx.createRadialGradient(
+        centerX, centerY, 0,
+        centerX, centerY, radius * 1.5
+      );
+      gradient.addColorStop(0, '#60A5FA'); // Lighter blue
+      gradient.addColorStop(1, '#3B82F6'); // Darker blue
+      
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+      ctx.fill();
+      
+      // Add GOT text for debugging/placeholder
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+      ctx.font = '20px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('GOT', centerX, centerY);
+    }
+  }, [hasAudioTrack, canvasDimensions]);
 
   return (
-    <canvas 
-      ref={canvasRef}
-      width={400}
-      height={400}
+    <div 
+      ref={containerRef}
       style={{
         width: '100%',
         height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        aspectRatio: '1/1',
         maxWidth: '400px',
         maxHeight: '400px',
-        backgroundColor: 'white'
       }}
-    />
+    >
+      <canvas 
+        ref={canvasRef}
+        width={canvasDimensions.width}
+        height={canvasDimensions.height}
+        style={{
+          width: `${canvasDimensions.width}px`,
+          height: `${canvasDimensions.height}px`,
+          backgroundColor: 'transparent'
+        }}
+      />
+    </div>
   );
 }
 
