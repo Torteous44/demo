@@ -44,7 +44,7 @@ function RealtimeConnect() {
     try {
       // 1) Get ephemeral token from your backend.
       appendLog("Fetching ephemeral token...");
-      const rtResp = await fetch(`http://localhost:8000/realtime/token?session_id=${sessionId}`, {
+      const rtResp = await fetch(`https://demobackend-p2e1.onrender.com/realtime/token?session_id=${sessionId}`, {
         method: "GET",
         headers: { Authorization: `Bearer ${jwtToken}` },
       });
