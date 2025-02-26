@@ -38,7 +38,7 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       console.log('Attempting login for:', email);
-      const resp = await fetch("https://demobackend-p2e1.onrender.comauth/login", {
+      const resp = await fetch("https://demobackend-p2e1.onrender.com/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
@@ -70,7 +70,7 @@ export const AuthProvider = ({ children }) => {
 
   const register = async (email, password) => {
     try {
-      const resp = await fetch("https://demobackend-p2e1.onrender.comauth/register", {
+      const resp = await fetch("https://demobackend-p2e1.onrender.com/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
