@@ -51,6 +51,22 @@ const AccessCode = () => {
     }
   };
 
+  // Update the grid cell hover function
+  const handleGridCellHover = (index) => {
+    // No need to do anything on hover - CSS handles this
+  };
+
+  // Add a new function to handle mouse leave
+  const handleGridCellLeave = (index) => {
+    const cell = document.querySelector(`.${styles.grid_cell}[data-index="${index}"]`);
+    if (cell) {
+      cell.classList.add(styles.trail);
+      setTimeout(() => {
+        cell.classList.remove(styles.trail);
+      }, 1000);
+    }
+  };
+
   return (
     <div className={styles.access_page}>
       <div className={styles.access_content}>
@@ -101,8 +117,18 @@ const AccessCode = () => {
       </div>
 
       <div className={styles.decorative_grid}>
+        <img 
+          src="/assets/logo.svg" 
+          alt="Reach Logo" 
+          className={styles.grid_logo}
+        />
         {[...Array(100)].map((_, index) => (
-          <div key={index} className={styles.grid_cell} />
+          <div 
+            key={index} 
+            className={styles.grid_cell} 
+            data-index={index}
+            onMouseLeave={() => handleGridCellLeave(index)}
+          />
         ))}
       </div>
     </div>
