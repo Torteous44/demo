@@ -21,6 +21,7 @@ const InterviewDetails = () => {
             'Content-Type': 'application/json',
           },
         });
+        console.log(response);
 
         if (!response.ok) {
           const errorData = await response.json();

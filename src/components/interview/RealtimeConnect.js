@@ -210,12 +210,6 @@ function RealtimeConnect() {
       peerConnectionRef.current = null;
     }
     
-    // Stop any existing local stream
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
-      localStreamRef.current = null;
-    }
-    
     setIsConnecting(true);
     appendLog("Starting connection process...");
 
@@ -225,10 +219,18 @@ function RealtimeConnect() {
     if (!sessionId) return alert("Need a session ID.");
 
     try {
+      // Get Twilio TURN credentials first
+      appendLog("Fetching TURN credentials...");
+      const turnResp = await fetch('https://demobackend-p2e1.onrender.com/webrtc/turn-credentials', {
+        headers: { Authorization: `Bearer ${jwtToken}` }
+      });
+      if (!turnResp.ok) throw new Error("Failed to get TURN credentials");
+      const turnData = await turnResp.json();
+      appendLog(`Got TURN credentials (TTL: ${turnData.ttl}s)`);
+
       // 1) Get ephemeral token from your backend.
       appendLog("Fetching ephemeral token...");
       const rtResp = await fetch(`https://demobackend-p2e1.onrender.com/realtime/token?session_id=${sessionId}`, {
-        method: "GET",
         headers: { Authorization: `Bearer ${jwtToken}` },
       });
       if (!rtResp.ok) throw new Error("Failed to get ephemeral token");
@@ -236,57 +238,32 @@ function RealtimeConnect() {
       const ephemeralKey = rtData.client_secret.value;
       appendLog("Got ephemeral key: " + ephemeralKey.substring(0, 15) + "...");
 
-      // 2) Create local RTCPeerConnection with improved ICE servers configuration
+      // 2) Create RTCPeerConnection with Twilio credentials
       appendLog("Creating RTCPeerConnection...");
-      
       const pc = new RTCPeerConnection({
         iceServers: [
-          // Google STUN servers
+          // Google STUN servers as fallback
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun1.l.google.com:19302" },
-          { urls: "stun:stun2.l.google.com:19302" },
           
-          // Cloudflare STUN servers
-          { urls: "stun:stun.cloudflare.com:3478" },
+          // Add Twilio's ICE servers
+          ...turnData.iceServers,
           
-          // Twilio STUN/TURN servers
-          {
-            urls: [
-              "stun:global.stun.twilio.com:3478",
-              "turn:global.turn.twilio.com:3478?transport=udp",
-              "turn:global.turn.twilio.com:3478?transport=tcp",
-              "turn:global.turn.twilio.com:443?transport=tcp"
-            ],
-            username: process.env.REACT_APP_TWILIO_USERNAME,
-            credential: process.env.REACT_APP_TWILIO_CREDENTIAL
-          },
-          
-          // OpenRelay servers as fallback
+          // OpenRelay as last resort fallback
           { urls: "stun:openrelay.metered.ca:80" },
           {
             urls: "turn:openrelay.metered.ca:80",
             username: "openrelayproject",
             credential: "openrelayproject"
-          },
-          {
-            urls: "turn:openrelay.metered.ca:443",
-            username: "openrelayproject",
-            credential: "openrelayproject"
-          },
-          {
-            urls: "turn:openrelay.metered.ca:443?transport=tcp",
-            username: "openrelayproject",
-            credential: "openrelayproject"
           }
         ],
         iceCandidatePoolSize: 10,
-        // Enable DTLS for secure connections
-        iceTransportPolicy: 'all', // Use 'relay' to force TURN usage in restrictive networks
+        iceTransportPolicy: 'all',
         rtcpMuxPolicy: 'require',
         bundlePolicy: 'max-bundle',
         sdpSemantics: 'unified-plan'
       });
-      
+
       // Store the peer connection in the ref
       peerConnectionRef.current = pc;
 
