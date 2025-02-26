@@ -37,6 +37,21 @@ function RealtimeConnect() {
   const [callDuration, setCallDuration] = useState(0);
   const durationIntervalRef = useRef(null);
 
+  // Add new state for tracking ICE restart attempts
+  const iceRestartAttemptsRef = useRef(0);
+  const maxIceRestarts = 3;
+  const iceRestartTimeoutRef = useRef(null);
+
+  // Add new state for notifications
+  const [notification, setNotification] = useState({
+    show: false,
+    message: '',
+    type: 'info' // 'info', 'error', 'warning', 'success'
+  });
+
+  // Add notification timeout ref
+  const notificationTimeoutRef = useRef(null);
+
   // Set call info from navigation state
   useEffect(() => {
     if (location.state) {
@@ -157,23 +172,71 @@ function RealtimeConnect() {
     
     // Cleanup function
     return () => {
-      // Close peer connection if it exists
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current.close();
-        peerConnectionRef.current = null;
+      appendLog("Component unmounting - cleaning up resources...");
+      
+      // Clear all intervals and timeouts
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+        durationIntervalRef.current = null;
       }
       
-      // Stop local stream tracks
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach(track => track.stop());
-        localStreamRef.current = null;
-      }
-      
-      // Clear any reconnection timeouts
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      
+      if (iceRestartTimeoutRef.current) {
+        clearTimeout(iceRestartTimeoutRef.current);
+        iceRestartTimeoutRef.current = null;
+      }
+      
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current);
+        notificationTimeoutRef.current = null;
+      }
+      
+      // Clean up peer connection
+      if (peerConnectionRef.current) {
+        // Remove all event listeners
+        peerConnectionRef.current.ontrack = null;
+        peerConnectionRef.current.onicecandidate = null;
+        peerConnectionRef.current.oniceconnectionstatechange = null;
+        peerConnectionRef.current.onicegatheringstatechange = null;
+        peerConnectionRef.current.onsignalingstatechange = null;
+        peerConnectionRef.current.onconnectionstatechange = null;
+        
+        // Close all data channels if any
+        peerConnectionRef.current.getDataChannels?.().forEach(channel => channel.close());
+        
+        // Close the connection
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+      }
+      
+      // Clean up audio element
+      if (audioRef.current) {
+        audioRef.current.srcObject = null;
+        audioRef.current.load();
+      }
+      
+      // Clean up media streams
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => {
+          track.stop();
+          track.enabled = false;
+        });
+        localStreamRef.current = null;
+      }
+      
+      if (remoteMediaStreamRef.current) {
+        remoteMediaStreamRef.current.getTracks().forEach(track => {
+          track.stop();
+          track.enabled = false;
+        });
+        remoteMediaStreamRef.current = new MediaStream();
+      }
+      
+      appendLog("Cleanup complete");
     };
   }, [sessionId]);
 
@@ -203,6 +266,26 @@ function RealtimeConnect() {
     }
   };
 
+  // Add showNotification helper function
+  const showNotification = (message, type = 'info', duration = 5000) => {
+    // Clear any existing timeout
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+    }
+
+    setNotification({
+      show: true,
+      message,
+      type
+    });
+
+    // Auto-hide notification after duration
+    notificationTimeoutRef.current = setTimeout(() => {
+      setNotification(prev => ({ ...prev, show: false }));
+    }, duration);
+  };
+
+  // Update handleConnect to use notifications instead of alerts
   async function handleConnect() {
     // Reset connection state if reconnecting
     if (peerConnectionRef.current) {
@@ -213,10 +296,16 @@ function RealtimeConnect() {
     setIsConnecting(true);
     appendLog("Starting connection process...");
 
-    // 0) Get JWT token from localStorage.
+    // Replace alert with notification
     const jwtToken = localStorage.getItem("token");
-    if (!jwtToken) return alert("You must be logged in first.");
-    if (!sessionId) return alert("Need a session ID.");
+    if (!jwtToken) {
+      showNotification("Please log in to continue", "error");
+      return;
+    }
+    if (!sessionId) {
+      showNotification("Invalid session", "error");
+      return;
+    }
 
     try {
       // Get Twilio TURN credentials first
@@ -240,14 +329,13 @@ function RealtimeConnect() {
 
       // 2) Create RTCPeerConnection with Twilio credentials
       appendLog("Creating RTCPeerConnection...");
-      const pc = new RTCPeerConnection({
+      const configuration = {
         iceServers: [
-          // Google STUN servers as fallback
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun1.l.google.com:19302" },
-          
-          // Add Twilio's ICE servers
+          // Prioritize Twilio TURN servers first since they're showing good performance
           ...turnData.iceServers,
+          { urls: "stun:stun.l.google.com:19302" },
+          // Google STUN servers as fallback
+          { urls: "stun:stun1.l.google.com:19302" },
           
           // OpenRelay as last resort fallback
           { urls: "stun:openrelay.metered.ca:80" },
@@ -258,13 +346,14 @@ function RealtimeConnect() {
           }
         ],
         iceCandidatePoolSize: 10,
-        iceTransportPolicy: 'all',
+        iceTransportPolicy: 'all', // Could consider 'relay' if NAT traversal is problematic
         rtcpMuxPolicy: 'require',
         bundlePolicy: 'max-bundle',
         sdpSemantics: 'unified-plan'
-      });
+      };
 
       // Store the peer connection in the ref
+      const pc = new RTCPeerConnection(configuration);
       peerConnectionRef.current = pc;
 
       // Set up connection state change handler
@@ -287,16 +376,17 @@ function RealtimeConnect() {
           
           // Start monitoring connection quality
           monitorConnectionQuality(pc);
-        } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+          iceRestartAttemptsRef.current = 0; // Reset ICE restart counter
+        } else if (pc.connectionState === 'disconnected') {
+          // Try ICE restart first before full reconnection
+          performIceRestart();
+        } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
           setCallActive(false);
-          
-          // Clear duration interval
           if (durationIntervalRef.current) {
             clearInterval(durationIntervalRef.current);
           }
-          
-          // Attempt reconnection for disconnected or failed states
-          if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+          // For failed state, attempt full reconnection
+          if (pc.connectionState === 'failed') {
             attemptReconnect();
           }
         }
@@ -484,10 +574,10 @@ function RealtimeConnect() {
     } catch (err) {
       appendLog(`Connection error: ${err.message}`);
       console.error("Connection error:", err);
-      alert("Connection error: " + err.message);
+      // Replace alert with notification
+      showNotification(`Connection error: ${err.message}`, "error");
       setIsConnecting(false);
       
-      // If this was an initial connection attempt, try reconnecting
       if (reconnectAttemptsRef.current === 0) {
         attemptReconnect();
       }
@@ -495,39 +585,81 @@ function RealtimeConnect() {
   }
 
   const handleEndCall = () => {
-    appendLog("Ending call...");
+    appendLog("Ending call - cleaning up resources...");
     
-    // Clear duration interval
+    // Clear all intervals and timeouts
     if (durationIntervalRef.current) {
       clearInterval(durationIntervalRef.current);
+      durationIntervalRef.current = null;
     }
     
-    // Close the peer connection
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    
+    if (iceRestartTimeoutRef.current) {
+      clearTimeout(iceRestartTimeoutRef.current);
+      iceRestartTimeoutRef.current = null;
+    }
+    
+    // Clean up peer connection
     if (peerConnectionRef.current) {
+      // Remove all event listeners
+      peerConnectionRef.current.ontrack = null;
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.oniceconnectionstatechange = null;
+      peerConnectionRef.current.onicegatheringstatechange = null;
+      peerConnectionRef.current.onsignalingstatechange = null;
+      peerConnectionRef.current.onconnectionstatechange = null;
+      
+      // Close all data channels if any
+      peerConnectionRef.current.getDataChannels?.().forEach(channel => channel.close());
+      
+      // Close the connection
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
     }
     
-    // Stop all local tracks
+    // Clean up audio element
+    if (audioRef.current) {
+      audioRef.current.srcObject = null;
+      audioRef.current.load(); // Reset the audio element
+    }
+    
+    // Clean up media streams
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        track.enabled = false;
+      });
       localStreamRef.current = null;
     }
     
-    // Reset connection state
+    if (remoteMediaStreamRef.current) {
+      remoteMediaStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        track.enabled = false;
+      });
+      remoteMediaStreamRef.current = new MediaStream();
+    }
+    
+    // Reset all state
     setConnectionState('closed');
     setCallActive(false);
     setIsConnecting(false);
+    setNetworkQuality('unknown');
+    setIsMuted(false);
     
     // Calculate final duration
     const finalDuration = callStartTime ? Math.floor((Date.now() - callStartTime) / 1000) : 0;
-    
-    // Format duration for display
     const minutes = Math.floor(finalDuration / 60);
     const seconds = finalDuration % 60;
     const formattedDuration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
     
-    // Navigate to summary page with duration
+    appendLog("Call ended - all resources cleaned up");
+    
+    // Navigate to summary page
     navigate('/summary', { 
       state: { 
         duration: formattedDuration
@@ -549,8 +681,97 @@ function RealtimeConnect() {
     appendLog(`Microphone ${isMuted ? 'unmuted' : 'muted'}`);
   };
 
+  // Function to handle ICE restart
+  const performIceRestart = async () => {
+    if (!peerConnectionRef.current || iceRestartAttemptsRef.current >= maxIceRestarts) {
+      appendLog("Cannot perform ICE restart - falling back to full reconnection");
+      attemptReconnect();
+      return;
+    }
+
+    try {
+      appendLog(`Attempting ICE restart (attempt ${iceRestartAttemptsRef.current + 1}/${maxIceRestarts})`);
+      iceRestartAttemptsRef.current++;
+
+      // Create new offer with iceRestart: true
+      const offer = await peerConnectionRef.current.createOffer({ 
+        iceRestart: true,
+        offerToReceiveAudio: true,
+        voiceActivityDetection: true
+      });
+      
+      await peerConnectionRef.current.setLocalDescription(offer);
+      
+      // Wait for ICE gathering with timeout
+      await Promise.race([
+        new Promise(resolve => {
+          const checkState = () => {
+            if (peerConnectionRef.current.iceGatheringState === "complete") {
+              peerConnectionRef.current.removeEventListener("icegatheringstatechange", checkState);
+              resolve();
+            }
+          };
+          peerConnectionRef.current.addEventListener("icegatheringstatechange", checkState);
+        }),
+        new Promise(resolve => setTimeout(resolve, 5000))
+      ]);
+
+      // Get new ephemeral token and send offer to OpenAI
+      const jwtToken = localStorage.getItem("token");
+      const rtResp = await fetch(`https://demobackend-p2e1.onrender.com/realtime/token?session_id=${sessionId}`, {
+        headers: { Authorization: `Bearer ${jwtToken}` },
+      });
+      const rtData = await rtResp.json();
+      const ephemeralKey = rtData.client_secret.value;
+
+      const sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ephemeralKey}`,
+          "Content-Type": "application/sdp",
+        },
+        body: offer.sdp,
+      });
+
+      if (!sdpResp.ok) throw new Error("Failed to get SDP answer during ICE restart");
+
+      const answerSDP = await sdpResp.text();
+      await peerConnectionRef.current.setRemoteDescription({ type: "answer", sdp: answerSDP });
+      
+      appendLog("ICE restart completed successfully");
+      iceRestartAttemptsRef.current = 0; // Reset counter on success
+    } catch (err) {
+      appendLog(`ICE restart failed: ${err.message}`);
+      // If ICE restart fails, try again with exponential backoff or fall back to full reconnect
+      const backoffTime = Math.min(1000 * Math.pow(2, iceRestartAttemptsRef.current), 5000);
+      
+      if (iceRestartAttemptsRef.current < maxIceRestarts) {
+        appendLog(`Retrying ICE restart in ${backoffTime/1000}s...`);
+        iceRestartTimeoutRef.current = setTimeout(performIceRestart, backoffTime);
+      } else {
+        appendLog("Maximum ICE restarts attempted, falling back to full reconnection");
+        attemptReconnect();
+      }
+    }
+  };
+
   return (
     <div className={styles.container}>
+      {/* Add notification component */}
+      {notification.show && (
+        <div className={`${styles.notification} ${styles[notification.type]}`}>
+          <div className={styles.notificationContent}>
+            {notification.message}
+          </div>
+          <button 
+            className={styles.notificationClose}
+            onClick={() => setNotification(prev => ({ ...prev, show: false }))}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Hidden audio element */}
       <audio
         ref={audioRef}
