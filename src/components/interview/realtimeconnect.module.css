@@ -93,18 +93,43 @@
   color: white;
 }
 
-.debugLog {
+.debugLogContainer {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  max-height: 150px;
-  overflow: auto;
-  background-color: rgba(0, 0, 0, 0.7);
-  color: white;
-  font-size: 0.7rem;
-  padding: 0.5rem;
-  display: none;
+  top: 20px;
+  left: 20px;
+  width: 300px;
+  max-height: 80vh;
+  overflow-y: auto;
+  background-color: rgba(0, 0, 0, 0.85);
+  z-index: 9999;
+  border: 1px solid #00ff00;
+  border-radius: 4px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+.debugLog {
+  padding: 8px;
+  margin: 0;
+  font-family: 'Consolas', monospace;
+  font-size: 11px;
+  color: #00ff00;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  line-height: 1.3;
+}
+
+/* Add a scrollbar style for webkit browsers */
+.debugLogContainer::-webkit-scrollbar {
+  width: 8px;
+}
+
+.debugLogContainer::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.debugLogContainer::-webkit-scrollbar-thumb {
+  background: #00ff00;
+  border-radius: 4px;
 }
 
 .connectionIndicator {

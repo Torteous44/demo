@@ -48,6 +48,17 @@ function RealtimeConnect() {
     }
   }, [location.state]);
 
+  useEffect(() => {
+    console.log('Debug environment:', {
+      NODE_ENV: process.env.NODE_ENV,
+      SHOW_DEBUG_LOGS: process.env.REACT_APP_SHOW_DEBUG_LOGS
+    });
+  }, []);
+
+  useEffect(() => {
+    appendLog("Debug logging initialized...");
+  }, []);
+
   function appendLog(msg) {
     console.log("Log:", msg);
     setLog((prev) => prev + "\n" + msg);
@@ -238,7 +249,19 @@ function RealtimeConnect() {
           // Cloudflare STUN servers
           { urls: "stun:stun.cloudflare.com:3478" },
           
-          // OpenRelay STUN and TURN servers with credentials
+          // Twilio STUN/TURN servers
+          {
+            urls: [
+              "stun:global.stun.twilio.com:3478",
+              "turn:global.turn.twilio.com:3478?transport=udp",
+              "turn:global.turn.twilio.com:3478?transport=tcp",
+              "turn:global.turn.twilio.com:443?transport=tcp"
+            ],
+            username: process.env.REACT_APP_TWILIO_USERNAME,
+            credential: process.env.REACT_APP_TWILIO_CREDENTIAL
+          },
+          
+          // OpenRelay servers as fallback
           { urls: "stun:openrelay.metered.ca:80" },
           {
             urls: "turn:openrelay.metered.ca:80",
@@ -322,7 +345,19 @@ function RealtimeConnect() {
       // Log ICE candidates for debugging
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          appendLog(`ICE candidate: ${event.candidate.protocol} ${event.candidate.type}`);
+          const candidateInfo = {
+            protocol: event.candidate.protocol,
+            type: event.candidate.type,
+            address: event.candidate.address,
+            server: event.candidate.relatedAddress ? 'TURN' : 'STUN',
+            url: event.candidate.url,
+            relatedAddress: event.candidate.relatedAddress,
+            relatedPort: event.candidate.relatedPort,
+            raw: event.candidate.candidate
+          };
+          
+          appendLog(`ICE candidate: ${JSON.stringify(candidateInfo, null, 2)}`);
+          console.log('ICE Candidate Details:', candidateInfo);
         }
       };
 
@@ -592,11 +627,15 @@ function RealtimeConnect() {
         </button>
       </div>
       
-      {/* Debug log - can be hidden in production */}
-      {process.env.NODE_ENV === 'development' && (
-        <pre className={styles.debugLog}>
-          {log}
-        </pre>
+      {/* Debug log - modified condition and added test content */}
+      {process.env.NODE_ENV === 'development' && 
+       (process.env.REACT_APP_SHOW_DEBUG_LOGS === 'true' || process.env.REACT_APP_SHOW_DEBUG_LOGS === '"true"') && (
+        <div className={styles.debugLogContainer}>
+          <pre className={styles.debugLog}>
+            === DEBUG LOG ===
+            {log || 'Waiting for logs...'}
+          </pre>
+        </div>
       )}
     </div>
   );
