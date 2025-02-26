@@ -5,7 +5,7 @@
   justify-content: space-between;
   height: 100vh;
   background-color: white;
-  padding: 2rem 1rem;
+  padding: 4rem 1rem;
   box-sizing: border-box;
 }
 
@@ -19,14 +19,18 @@
 
 .callPrice {
   font-size: 0.9rem;
-  color: #666;
+  color: #313947;
   margin-bottom: 0.5rem;
+  background-color: #F6F9FC;
+  padding: 4px 16px;
+  border-radius: 24px;
+  display: inline-block;
 }
 
 .callTitle {
-  font-size: 1.5rem;
-  font-weight: bold;
-  margin-bottom: 0.5rem;
+  font-size: 1.8rem;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
 }
 
 .callHost {
@@ -68,9 +72,10 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  font-size: 1.5rem;
+  font-size: 1.2rem;
   transition: all 0.2s ease;
 }
+
 
 .micButton {
   background-color: #f2f2f2;
@@ -140,7 +145,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  background-color: rgba(0, 0, 0, 0.6);
+  background-color: #F6F9FC;
   padding: 4px 8px;
   border-radius: 12px;
 }
@@ -155,7 +160,7 @@
 .statusText {
   font-size: 12px;
   font-weight: 500;
-  color: #ffffff;
+  color: #2AA8FF;
   white-space: nowrap;
 }
 
@@ -301,7 +306,7 @@
 }
 
 .success {
-  background-color: #10b981;
+  background-color: #2AA8FF;
   color: white;
 }
 
