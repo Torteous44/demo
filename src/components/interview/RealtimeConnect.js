@@ -1,17 +1,19 @@
 // interview-frontend/src/components/RealtimeConnect.js
 import React, { useEffect, useState, useRef } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useLocation, useNavigate } from "react-router-dom";
 import AudioVisualizer from "./AudioVisualizer";
 import styles from "./realtimeconnect.module.css";
 
 function RealtimeConnect() {
   const { sessionId } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [log, setLog] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [callActive, setCallActive] = useState(false);
   const [callInfo, setCallInfo] = useState({
-    title: "Reach - Demo Interview",
-    host: "The Reach Team",
+    title: "Loading...",
+    host: "Loading...",
     price: "$5.00 call"
   });
   
@@ -31,6 +33,20 @@ function RealtimeConnect() {
   const [isMuted, setIsMuted] = useState(false);
   const [connectionState, setConnectionState] = useState('new');
   const [networkQuality, setNetworkQuality] = useState('unknown');
+  const [callStartTime, setCallStartTime] = useState(null);
+  const [callDuration, setCallDuration] = useState(0);
+  const durationIntervalRef = useRef(null);
+
+  // Set call info from navigation state
+  useEffect(() => {
+    if (location.state) {
+      setCallInfo({
+        title: location.state.title,
+        host: location.state.host,
+        price: `$${location.state.price} call`
+      });
+    }
+  }, [location.state]);
 
   function appendLog(msg) {
     console.log("Log:", msg);
@@ -259,12 +275,25 @@ function RealtimeConnect() {
         if (pc.connectionState === 'connected') {
           setCallActive(true);
           setIsConnecting(false);
-          reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
+          reconnectAttemptsRef.current = 0;
+          
+          // Start tracking call duration
+          const startTime = Date.now();
+          setCallStartTime(startTime);
+          durationIntervalRef.current = setInterval(() => {
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            setCallDuration(elapsed);
+          }, 1000);
           
           // Start monitoring connection quality
           monitorConnectionQuality(pc);
         } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
           setCallActive(false);
+          
+          // Clear duration interval
+          if (durationIntervalRef.current) {
+            clearInterval(durationIntervalRef.current);
+          }
           
           // Attempt reconnection for disconnected or failed states
           if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
@@ -456,6 +485,11 @@ function RealtimeConnect() {
   const handleEndCall = () => {
     appendLog("Ending call...");
     
+    // Clear duration interval
+    if (durationIntervalRef.current) {
+      clearInterval(durationIntervalRef.current);
+    }
+    
     // Close the peer connection
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
@@ -473,7 +507,20 @@ function RealtimeConnect() {
     setCallActive(false);
     setIsConnecting(false);
     
-    window.history.back();
+    // Calculate final duration
+    const finalDuration = callStartTime ? Math.floor((Date.now() - callStartTime) / 1000) : 0;
+    
+    // Format duration for display
+    const minutes = Math.floor(finalDuration / 60);
+    const seconds = finalDuration % 60;
+    const formattedDuration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    
+    // Navigate to summary page with duration
+    navigate('/summary', { 
+      state: { 
+        duration: formattedDuration
+      }
+    });
   };
 
   const handleMuteToggle = () => {
@@ -520,13 +567,10 @@ function RealtimeConnect() {
       
       {/* Visualizer area */}
       <div className={styles.visualizerContainer}>
-        {isConnecting ? (
-          <div className={styles.loadingContainer}>
-            <div className={styles.spinner}></div>
-          </div>
-        ) : (
-          <AudioVisualizer mediaStream={remoteMediaStreamRef.current} />
-        )}
+        <AudioVisualizer 
+          mediaStream={remoteMediaStreamRef.current} 
+          isLoading={isConnecting}
+        />
       </div>
       
       {/* Call controls */}

@@ -1,3 +1,180 @@
+.container {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem;
+  background-color: #fff;
+}
+
+.content {
+  max-width: 600px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.logo{
+  align-self: center;
+  margin-top: 5rem;
+}
+
+.logo img {
+  width: 48px;
+  height: 48px;
+}
+
+.title, .subtitle {
+  text-align: center;
+  align-self: center;
+}
+
+.title {
+  font-size: 2.5rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: #111827;
+}
+
+.subtitle {
+  font-size: 1rem;
+  color: #4B5563;
+  margin-bottom: 3rem;
+}
+
+.signupText {
+  color: #6B7280;
+  font-size: 1rem;
+  margin-bottom: 1rem;
+}
+
+.interviewCard {
+  width: 100%;
+  max-width: 400px;
+  background: #FFFFFF;
+  border-radius: 16px;
+  border: 1px solid #E5E7EB;
+  overflow: hidden;
+  margin-bottom: 2rem;
+  align-self: center;
+}
+
+.coverImageContainer {
+  position: relative;
+  width: 100%;
+  height: 200px;
+}
+
+.coverImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.priceTag {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: #60A5FA;
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.interviewInfo {
+  padding: 1rem;
+  background: white;
+  text-align: left;
+}
+
+.titleAndDuration {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
+  text-align: left;
+}
+
+.interviewTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #111827;
+  margin: 0;
+}
+
+.duration {
+  color: #6B7280;
+  font-size: 0.875rem;
+}
+
+.interviewHost {
+  color: #6B7280;
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.actions {
+  width: 100%;
+  display: flex;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.secondaryButton {
+  flex: 1;
+  padding: 0.75rem 1.5rem;
+  border: 1px solid #D1D5DB;
+  border-radius: 8px;
+  background: white;
+  color: #374151;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.secondaryButton:hover {
+  background-color: #F3F4F6;
+}
+
+.primaryButton {
+  flex: 1;
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  background: #3B82F6;
+  color: white;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.primaryButton:hover {
+  background-color: #2563EB;
+}
+
+.loading, .error {
+  text-align: center;
+  padding: 2rem;
+  color: #6B7280;
+}
+
+.error button {
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 8px;
+  background: #3B82F6;
+  color: white;
+  cursor: pointer;
+}
+
 .details_container {
   min-height: 100vh;
   padding: 40px;
@@ -55,6 +232,7 @@
   display: flex;
   gap: 16px;
   align-items: center;
+  width: 100%;
 }
 
 .interview_thumbnail {
@@ -125,18 +303,50 @@
   font-size: 14px;
 }
 
-.loading, .error {
-  text-align: center;
-  padding: 40px;
+.cover_image {
+  width: 100%;
+  height: 200px;
+  overflow: hidden;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  background-color: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cover_image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.interview_duration {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
   color: #666;
 }
 
-.error button {
-  margin-top: 16px;
-  padding: 8px 16px;
+.backButton {
+  position: absolute;
+  top: 1.5rem;
+  left: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: none;
   border: none;
-  border-radius: 4px;
-  background: #2AA8FF;
-  color: white;
+  padding: 0.5rem;
   cursor: pointer;
+  color: #6B7280;
+  font-size: 0.875rem;
+}
+
+.backButton img {
+  width: 20px;
+  height: 20px;
+}
+
+.backButton:hover {
+  color: #374151;
 } 
