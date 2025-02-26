@@ -3,8 +3,31 @@ import React, { useRef, useEffect, useState } from 'react';
 function AudioVisualizer({ mediaStream }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const logoRef = useRef(null);
   const [hasAudioTrack, setHasAudioTrack] = useState(false);
   const [canvasDimensions, setCanvasDimensions] = useState({ width: 400, height: 400 });
+  const [logoLoaded, setLogoLoaded] = useState(false);
+  const animationFrameRef = useRef(null);
+  const peakTimersRef = useRef([]);
+  const lastVolumeRef = useRef(0);
+  const isSpeakingRef = useRef(false);
+  
+  // Add refs to store current and target values for smooth transitions
+  const currentLengthsRef = useRef([]);
+  const targetLengthsRef = useRef([]);
+
+  // Load logo image
+  useEffect(() => {
+    const logo = new Image();
+    logo.src = '/logo.svg';
+    logo.onload = () => {
+      logoRef.current = logo;
+      setLogoLoaded(true);
+    };
+    logo.onerror = (err) => {
+      console.error('Error loading logo:', err);
+    };
+  }, []);
 
   // Resize handler to maintain square aspect ratio
   useEffect(() => {
@@ -41,7 +64,7 @@ function AudioVisualizer({ mediaStream }) {
     
     // Configure for volume detection
     analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.7;
+    analyser.smoothingTimeConstant = 0.8; // Increased for smoother transitions
     const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
     const canvas = canvasRef.current;
@@ -50,12 +73,94 @@ function AudioVisualizer({ mediaStream }) {
     // Create initial random lengths for bars
     const numLines = 100;
     const randomFactors = Array.from({ length: numLines }, () => Math.random() * 0.5 + 0.5);
+    
+    // Initialize current and target lengths
+    if (currentLengthsRef.current.length === 0) {
+      currentLengthsRef.current = Array(numLines).fill(0);
+    }
+    if (targetLengthsRef.current.length === 0) {
+      targetLengthsRef.current = Array(numLines).fill(0);
+    }
+    
+    // Create array to track peaks
+    const peakFactors = Array(numLines).fill(0);
+    
+    // Setup random peak generation with smoother transitions
+    const setupPeakTimers = () => {
+      // Clear any existing timers
+      peakTimersRef.current.forEach(timer => clearTimeout(timer));
+      peakTimersRef.current = [];
+      
+      // Function to create a random peak
+      const createRandomPeak = () => {
+        // Only create peaks if speaking is detected
+        if (!isSpeakingRef.current) {
+          // Schedule next check if not speaking
+          const nextCheckTime = 200; // Check again in 200ms
+          const timer = setTimeout(createRandomPeak, nextCheckTime);
+          peakTimersRef.current.push(timer);
+          return;
+        }
+        
+        // Choose a random section (group of adjacent lines)
+        const sectionStart = Math.floor(Math.random() * numLines);
+        const sectionWidth = Math.floor(Math.random() * 10) + 5; // 5-15 lines
+        
+        // Create a bell curve distribution for the peak intensity
+        const peakCenter = sectionWidth / 2;
+        const peakIntensity = Math.random() * 0.8 + 0.2; // 0.2-1.0 max intensity
+        
+        // Create a peak that affects multiple adjacent lines with bell curve distribution
+        for (let i = 0; i < sectionWidth; i++) {
+          const index = (sectionStart + i) % numLines;
+          
+          // Calculate intensity based on distance from center (bell curve)
+          const distanceFromCenter = Math.abs(i - peakCenter);
+          const normalizedDistance = distanceFromCenter / peakCenter;
+          const intensity = peakIntensity * Math.exp(-3 * normalizedDistance * normalizedDistance);
+          
+          peakFactors[index] = intensity;
+          
+          // Schedule the peak to decay gradually
+          const decayTime = Math.random() * 1500 + 800; // 800-2300ms
+          const decaySteps = 20; // More steps for smoother decay
+          const decayInterval = decayTime / decaySteps;
+          const decayAmount = intensity / decaySteps;
+          
+          // Create multiple timers for gradual decay
+          for (let step = 1; step <= decaySteps; step++) {
+            const timer = setTimeout(() => {
+              peakFactors[index] = Math.max(0, intensity - (decayAmount * step));
+            }, decayInterval * step);
+            
+            peakTimersRef.current.push(timer);
+          }
+        }
+        
+        // Schedule next peak
+        const nextPeakTime = Math.random() * 2000 + 500; // 500-2500ms
+        const timer = setTimeout(createRandomPeak, nextPeakTime);
+        peakTimersRef.current.push(timer);
+      };
+      
+      // Start the peak generation
+      createRandomPeak();
+    };
+    
+    setupPeakTimers();
 
     function draw() {
       analyser.getByteFrequencyData(dataArray);
 
       // Calculate average volume
       const volume = dataArray.reduce((acc, val) => acc + val, 0) / dataArray.length;
+      
+      // Smooth volume transitions
+      lastVolumeRef.current = lastVolumeRef.current * 0.7 + volume * 0.3;
+      
+      // Detect if speaking (volume above threshold)
+      const speakingThreshold = 20; // Adjust based on your audio input sensitivity
+      isSpeakingRef.current = lastVolumeRef.current > speakingThreshold;
       
       const WIDTH = canvas.width;
       const HEIGHT = canvas.height;
@@ -66,21 +171,42 @@ function AudioVisualizer({ mediaStream }) {
       // Clear canvas
       ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
+      // Draw logo in the center if loaded
+      if (logoLoaded && logoRef.current) {
+        const logoSize = baseRadius * 1.5;
+        ctx.drawImage(
+          logoRef.current, 
+          centerX - logoSize/2, 
+          centerY - logoSize/2, 
+          logoSize, 
+          logoSize
+        );
+      }
+
       // Draw lines
       const angleStep = (2 * Math.PI) / numLines;
       const minLength = baseRadius * 0.15; // Minimum line length
       const maxLengthAdd = baseRadius * 0.5; // Maximum additional length
+      
+      // Intensity boost during speech
+      const intensityBoost = isSpeakingRef.current ? 1.2 : 1.0; // 20% boost when speaking
 
-      ctx.strokeStyle = '#007BFF';
-      ctx.lineWidth = 2;
-      ctx.lineCap = 'butt';
-
+      // Update target lengths based on current audio and peaks
       for (let i = 0; i < numLines; i++) {
-        const angle = i * angleStep - Math.PI / 2;
+        const volumeFactor = lastVolumeRef.current / 255;
+        const peakBoost = peakFactors[i] * 0.5; // Peak boost (0-0.5)
+        targetLengthsRef.current[i] = minLength + (maxLengthAdd * (volumeFactor * randomFactors[i] + peakBoost) * intensityBoost);
+      }
+      
+      // Smooth transition between current and target lengths
+      const transitionSpeed = 0.15; // Adjust for faster/slower transitions
+      
+      for (let i = 0; i < numLines; i++) {
+        // Smoothly interpolate between current and target length
+        currentLengthsRef.current[i] += (targetLengthsRef.current[i] - currentLengthsRef.current[i]) * transitionSpeed;
         
-        // Calculate line length using volume and random factor
-        const volumeFactor = volume / 255;
-        const lineLength = minLength + (maxLengthAdd * volumeFactor * randomFactors[i]);
+        const angle = i * angleStep - Math.PI / 2;
+        const lineLength = currentLengthsRef.current[i];
         
         // Calculate start point (inner circle)
         const startX = centerX + baseRadius * Math.cos(angle);
@@ -90,32 +216,48 @@ function AudioVisualizer({ mediaStream }) {
         const endX = centerX + (baseRadius + lineLength) * Math.cos(angle);
         const endY = centerY + (baseRadius + lineLength) * Math.sin(angle);
 
-        // Draw line
+        // Draw line with gradient
+        const lineGradient = ctx.createLinearGradient(startX, startY, endX, endY);
+        lineGradient.addColorStop(0, '#60A5FA'); // Lighter blue at start
+        lineGradient.addColorStop(1, '#3B82F6'); // Darker blue at end
+        
+        ctx.strokeStyle = lineGradient;
+        // Slightly thicker lines during speech
+        ctx.lineWidth = isSpeakingRef.current ? 2.5 : 2;
+        ctx.lineCap = 'round'; // Rounded line caps for smoother appearance
+        
         ctx.beginPath();
         ctx.moveTo(startX, startY);
         ctx.lineTo(endX, endY);
         ctx.stroke();
 
-        // Occasionally update random factors
-        if (Math.random() < 0.02) { // 2% chance each frame
+        // Occasionally update random factors (less frequently for smoother changes)
+        if (Math.random() < 0.005) { // 0.5% chance each frame
           randomFactors[i] = Math.random() * 0.5 + 0.5;
         }
       }
 
-      requestAnimationFrame(draw);
+      animationFrameRef.current = requestAnimationFrame(draw);
     }
 
-    const animation = requestAnimationFrame(draw);
+    animationFrameRef.current = requestAnimationFrame(draw);
 
     return () => {
-      cancelAnimationFrame(animation);
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      
+      // Clear all peak timers
+      peakTimersRef.current.forEach(timer => clearTimeout(timer));
+      peakTimersRef.current = [];
+      
       source.disconnect();
       analyser.disconnect();
       audioContext.close();
     };
-  }, [mediaStream, hasAudioTrack]);
+  }, [mediaStream, hasAudioTrack, logoLoaded]);
 
-  // Draw a static circle when no audio is available
+  // Draw a static circle with random peaks when no audio is available
   useEffect(() => {
     if (!hasAudioTrack && canvasRef.current) {
       const canvas = canvasRef.current;
@@ -124,32 +266,195 @@ function AudioVisualizer({ mediaStream }) {
       const HEIGHT = canvas.height;
       const centerX = WIDTH / 2;
       const centerY = HEIGHT / 2;
-      const radius = Math.min(WIDTH, HEIGHT) * 0.3;
+      const baseRadius = Math.min(WIDTH, HEIGHT) * 0.3;
+      
+      // Create initial random lengths for bars
+      const numLines = 100;
+      const randomFactors = Array.from({ length: numLines }, () => Math.random() * 0.5 + 0.5);
+      
+      // Initialize current and target lengths if needed
+      if (currentLengthsRef.current.length === 0) {
+        currentLengthsRef.current = Array(numLines).fill(0);
+      }
+      if (targetLengthsRef.current.length === 0) {
+        targetLengthsRef.current = Array(numLines).fill(0);
+      }
+      
+      // Create array to track peaks
+      const peakFactors = Array(numLines).fill(0);
+      
+      // For static visualization, simulate occasional "speech" for visual interest
+      let simulatedSpeechTimer = null;
+      let isSimulatedSpeaking = false;
+      
+      const toggleSimulatedSpeech = () => {
+        isSimulatedSpeaking = !isSimulatedSpeaking;
+        
+        // Schedule next toggle
+        const nextToggleTime = isSimulatedSpeaking ? 
+          Math.random() * 3000 + 2000 : // Speaking for 2-5 seconds
+          Math.random() * 5000 + 3000;  // Silent for 3-8 seconds
+          
+        simulatedSpeechTimer = setTimeout(toggleSimulatedSpeech, nextToggleTime);
+      };
+      
+      // Start with some silence
+      simulatedSpeechTimer = setTimeout(toggleSimulatedSpeech, Math.random() * 2000 + 1000);
+      
+      // Setup random peak generation with smoother transitions
+      const setupPeakTimers = () => {
+        // Clear any existing timers
+        peakTimersRef.current.forEach(timer => clearTimeout(timer));
+        peakTimersRef.current = [];
+        
+        // Function to create a random peak
+        const createRandomPeak = () => {
+          // Only create peaks during simulated speech
+          if (!isSimulatedSpeaking) {
+            // Schedule next check if not speaking
+            const nextCheckTime = 200; // Check again in 200ms
+            const timer = setTimeout(createRandomPeak, nextCheckTime);
+            peakTimersRef.current.push(timer);
+            return;
+          }
+          
+          // Choose a random section (group of adjacent lines)
+          const sectionStart = Math.floor(Math.random() * numLines);
+          const sectionWidth = Math.floor(Math.random() * 10) + 5; // 5-15 lines
+          
+          // Create a bell curve distribution for the peak intensity
+          const peakCenter = sectionWidth / 2;
+          const peakIntensity = Math.random() * 0.8 + 0.2; // 0.2-1.0 max intensity
+          
+          // Create a peak that affects multiple adjacent lines with bell curve distribution
+          for (let i = 0; i < sectionWidth; i++) {
+            const index = (sectionStart + i) % numLines;
+            
+            // Calculate intensity based on distance from center (bell curve)
+            const distanceFromCenter = Math.abs(i - peakCenter);
+            const normalizedDistance = distanceFromCenter / peakCenter;
+            const intensity = peakIntensity * Math.exp(-3 * normalizedDistance * normalizedDistance);
+            
+            peakFactors[index] = intensity;
+            
+            // Schedule the peak to decay gradually
+            const decayTime = Math.random() * 1500 + 800; // 800-2300ms
+            const decaySteps = 20; // More steps for smoother decay
+            const decayInterval = decayTime / decaySteps;
+            const decayAmount = intensity / decaySteps;
+            
+            // Create multiple timers for gradual decay
+            for (let step = 1; step <= decaySteps; step++) {
+              const timer = setTimeout(() => {
+                peakFactors[index] = Math.max(0, intensity - (decayAmount * step));
+              }, decayInterval * step);
+              
+              peakTimersRef.current.push(timer);
+            }
+          }
+          
+          // Schedule next peak
+          const nextPeakTime = Math.random() * 2000 + 500; // 500-2500ms
+          const timer = setTimeout(createRandomPeak, nextPeakTime);
+          peakTimersRef.current.push(timer);
+        };
+        
+        // Start the peak generation
+        createRandomPeak();
+      };
+      
+      setupPeakTimers();
+      
+      function drawStatic() {
+        // Clear canvas
+        ctx.clearRect(0, 0, WIDTH, HEIGHT);
+        
+        // Draw logo in the center if loaded
+        if (logoLoaded && logoRef.current) {
+          const logoSize = baseRadius * 1.5;
+          ctx.drawImage(
+            logoRef.current, 
+            centerX - logoSize/2, 
+            centerY - logoSize/2, 
+            logoSize, 
+            logoSize
+          );
+        }
+        
+        // Intensity boost during simulated speech
+        const intensityBoost = isSimulatedSpeaking ? 1.2 : 1.0; // 20% boost when "speaking"
+        
+        // Update target lengths based on peaks and simulated speech
+        for (let i = 0; i < numLines; i++) {
+          const peakBoost = peakFactors[i] * 0.5; // Peak boost (0-0.5)
+          const baseLength = randomFactors[i] * 0.3; // Base random length
+          const simulatedVolume = isSimulatedSpeaking ? 0.3 + (Math.sin(Date.now() / 300 + i / 10) * 0.1) : 0.1;
+          targetLengthsRef.current[i] = (baseRadius * 0.15) + ((baseRadius * 0.5) * (baseLength + peakBoost + simulatedVolume) * intensityBoost);
+        }
+        
+        // Smooth transition between current and target lengths
+        const transitionSpeed = 0.1; // Slightly slower for static visualization
+        
+        // Draw lines
+        const angleStep = (2 * Math.PI) / numLines;
 
-      // Clear canvas
-      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+        for (let i = 0; i < numLines; i++) {
+          // Smoothly interpolate between current and target length
+          currentLengthsRef.current[i] += (targetLengthsRef.current[i] - currentLengthsRef.current[i]) * transitionSpeed;
+          
+          const angle = i * angleStep - Math.PI / 2;
+          const lineLength = currentLengthsRef.current[i];
+          
+          // Calculate start point (inner circle)
+          const startX = centerX + baseRadius * Math.cos(angle);
+          const startY = centerY + baseRadius * Math.sin(angle);
+          
+          // Calculate end point
+          const endX = centerX + (baseRadius + lineLength) * Math.cos(angle);
+          const endY = centerY + (baseRadius + lineLength) * Math.sin(angle);
+
+          // Draw line with gradient
+          const lineGradient = ctx.createLinearGradient(startX, startY, endX, endY);
+          lineGradient.addColorStop(0, '#60A5FA'); // Lighter blue at start
+          lineGradient.addColorStop(1, '#3B82F6'); // Darker blue at end
+          
+          ctx.strokeStyle = lineGradient;
+          // Slightly thicker lines during simulated speech
+          ctx.lineWidth = isSimulatedSpeaking ? 2.5 : 2;
+          ctx.lineCap = 'round'; // Rounded line caps for smoother appearance
+          
+          ctx.beginPath();
+          ctx.moveTo(startX, startY);
+          ctx.lineTo(endX, endY);
+          ctx.stroke();
+
+          // Occasionally update random factors (less frequently for smoother changes)
+          if (Math.random() < 0.005) { // 0.5% chance each frame
+            randomFactors[i] = Math.random() * 0.5 + 0.5;
+          }
+        }
+        
+        animationFrameRef.current = requestAnimationFrame(drawStatic);
+      }
       
-      // Draw gradient background circle
-      const gradient = ctx.createRadialGradient(
-        centerX, centerY, 0,
-        centerX, centerY, radius * 1.5
-      );
-      gradient.addColorStop(0, '#60A5FA'); // Lighter blue
-      gradient.addColorStop(1, '#3B82F6'); // Darker blue
+      animationFrameRef.current = requestAnimationFrame(drawStatic);
       
-      ctx.fillStyle = gradient;
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-      ctx.fill();
-      
-      // Add GOT text for debugging/placeholder
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-      ctx.font = '20px Arial';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('GOT', centerX, centerY);
+      return () => {
+        if (animationFrameRef.current) {
+          cancelAnimationFrame(animationFrameRef.current);
+        }
+        
+        // Clear all peak timers
+        peakTimersRef.current.forEach(timer => clearTimeout(timer));
+        peakTimersRef.current = [];
+        
+        // Clear speech simulation timer
+        if (simulatedSpeechTimer) {
+          clearTimeout(simulatedSpeechTimer);
+        }
+      };
     }
-  }, [hasAudioTrack, canvasDimensions]);
+  }, [hasAudioTrack, canvasDimensions, logoLoaded]);
 
   return (
     <div 

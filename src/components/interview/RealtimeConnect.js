@@ -19,20 +19,176 @@ function RealtimeConnect() {
   const remoteMediaStreamRef = useRef(new MediaStream());
   // Reference for the audio element
   const audioRef = useRef(null);
+  // Reference to store the RTCPeerConnection
+  const peerConnectionRef = useRef(null);
+  // Reference to store local stream
+  const localStreamRef = useRef(null);
+  // Reference for reconnection attempts
+  const reconnectAttemptsRef = useRef(0);
+  const maxReconnectAttempts = 5;
+  const reconnectTimeoutRef = useRef(null);
+
+  const [isMuted, setIsMuted] = useState(false);
+  const [connectionState, setConnectionState] = useState('new');
+  const [networkQuality, setNetworkQuality] = useState('unknown');
 
   function appendLog(msg) {
     console.log("Log:", msg);
     setLog((prev) => prev + "\n" + msg);
   }
 
+  // Function to monitor and analyze connection quality
+  const monitorConnectionQuality = (pc) => {
+    if (!pc) return;
+    
+    // Get connection stats every 3 seconds
+    const statsInterval = setInterval(async () => {
+      if (pc.connectionState !== 'connected') {
+        clearInterval(statsInterval);
+        return;
+      }
+      
+      try {
+        const stats = await pc.getStats();
+        let totalPacketsLost = 0;
+        let totalPackets = 0;
+        let currentRtt = 0;
+        
+        stats.forEach(stat => {
+          // Look for inbound-rtp stats to check packet loss
+          if (stat.type === 'inbound-rtp' && stat.packetsLost !== undefined) {
+            totalPacketsLost += stat.packetsLost;
+            totalPackets += stat.packetsReceived;
+          }
+          
+          // Look for remote-inbound-rtp for RTT (Round Trip Time)
+          if (stat.type === 'remote-inbound-rtp' && stat.roundTripTime !== undefined) {
+            currentRtt = stat.roundTripTime;
+          }
+        });
+        
+        // Calculate packet loss percentage
+        const packetLossPercent = totalPackets > 0 ? (totalPacketsLost / totalPackets) * 100 : 0;
+        
+        // Determine connection quality
+        let quality = 'excellent';
+        if (packetLossPercent > 10 || currentRtt > 0.3) {
+          quality = 'poor';
+        } else if (packetLossPercent > 3 || currentRtt > 0.15) {
+          quality = 'fair';
+        } else if (packetLossPercent > 1 || currentRtt > 0.05) {
+          quality = 'good';
+        }
+        
+        setNetworkQuality(quality);
+        
+        // Log connection stats for debugging
+        appendLog(`Connection quality: ${quality} (loss: ${packetLossPercent.toFixed(1)}%, RTT: ${(currentRtt * 1000).toFixed(0)}ms)`);
+      } catch (err) {
+        console.error("Error getting connection stats:", err);
+      }
+    }, 3000);
+    
+    return () => clearInterval(statsInterval);
+  };
+
+  // Function to handle reconnection
+  const attemptReconnect = async () => {
+    if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
+      appendLog("Maximum reconnection attempts reached. Please try again later.");
+      setIsConnecting(false);
+      return;
+    }
+    
+    reconnectAttemptsRef.current++;
+    appendLog(`Reconnection attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts}...`);
+    
+    try {
+      await handleConnect();
+    } catch (err) {
+      appendLog(`Reconnection failed: ${err.message}`);
+      
+      // Exponential backoff for retry
+      const backoffTime = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 10000);
+      appendLog(`Retrying in ${backoffTime/1000} seconds...`);
+      
+      reconnectTimeoutRef.current = setTimeout(attemptReconnect, backoffTime);
+    }
+  };
+
   useEffect(() => {
     // Auto-connect when component mounts if we have a sessionId
     if (sessionId) {
-      handleConnect();
+      // Reset connection state before attempting to connect
+      reconnectAttemptsRef.current = 0;
+      
+      // Small delay to ensure component is fully mounted
+      setTimeout(() => {
+        handleConnect();
+      }, 100);
     }
+    
+    // Cleanup function
+    return () => {
+      // Close peer connection if it exists
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+      }
+      
+      // Stop local stream tracks
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
+      }
+      
+      // Clear any reconnection timeouts
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    };
   }, [sessionId]);
 
+  // Function to get color for connection state
+  const getConnectionStateColor = (state) => {
+    switch (state) {
+      case 'connected': return '#4ade80'; // Green
+      case 'connecting': return '#facc15'; // Yellow
+      case 'checking': return '#facc15'; // Yellow
+      case 'disconnected': return '#f97316'; // Orange
+      case 'failed': return '#ef4444'; // Red
+      case 'closed': return '#ef4444'; // Red
+      default: return '#a3a3a3'; // Gray for new/unknown
+    }
+  };
+
+  // Function to get human-readable status text
+  const getConnectionStatusText = (state) => {
+    switch (state) {
+      case 'connected': return 'Connected';
+      case 'connecting': return 'Connecting';
+      case 'checking': return 'Checking';
+      case 'disconnected': return 'Disconnected';
+      case 'failed': return 'Failed';
+      case 'closed': return 'Closed';
+      default: return 'Initializing';
+    }
+  };
+
   async function handleConnect() {
+    // Reset connection state if reconnecting
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    
+    // Stop any existing local stream
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    
     setIsConnecting(true);
     appendLog("Starting connection process...");
 
@@ -53,37 +209,115 @@ function RealtimeConnect() {
       const ephemeralKey = rtData.client_secret.value;
       appendLog("Got ephemeral key: " + ephemeralKey.substring(0, 15) + "...");
 
-      // 2) Create local RTCPeerConnection.
+      // 2) Create local RTCPeerConnection with improved ICE servers configuration
       appendLog("Creating RTCPeerConnection...");
+      
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        iceServers: [
+          // Google STUN servers
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+          { urls: "stun:stun2.l.google.com:19302" },
+          
+          // Cloudflare STUN servers
+          { urls: "stun:stun.cloudflare.com:3478" },
+          
+          // OpenRelay STUN and TURN servers with credentials
+          { urls: "stun:openrelay.metered.ca:80" },
+          {
+            urls: "turn:openrelay.metered.ca:80",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+          },
+          {
+            urls: "turn:openrelay.metered.ca:443",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+          },
+          {
+            urls: "turn:openrelay.metered.ca:443?transport=tcp",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+          }
+        ],
+        iceCandidatePoolSize: 10,
+        // Enable DTLS for secure connections
+        iceTransportPolicy: 'all', // Use 'relay' to force TURN usage in restrictive networks
+        rtcpMuxPolicy: 'require',
+        bundlePolicy: 'max-bundle',
+        sdpSemantics: 'unified-plan'
       });
+      
+      // Store the peer connection in the ref
+      peerConnectionRef.current = pc;
 
+      // Set up connection state change handler
       pc.onconnectionstatechange = () => {
         appendLog(`Connection state changed: ${pc.connectionState}`);
+        setConnectionState(pc.connectionState);
+        
         if (pc.connectionState === 'connected') {
           setCallActive(true);
           setIsConnecting(false);
+          reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
+          
+          // Start monitoring connection quality
+          monitorConnectionQuality(pc);
         } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
           setCallActive(false);
+          
+          // Attempt reconnection for disconnected or failed states
+          if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+            attemptReconnect();
+          }
         }
       };
+
+      // Set up ICE connection state change handler
       pc.oniceconnectionstatechange = () => {
-        appendLog(`ICE connection state: ${pc.iceConnectionState}`);
+        appendLog(`ICE connection state changed: ${pc.iceConnectionState}`);
+        // Update connection state based on ICE state as well
+        if (pc.iceConnectionState === 'checking') {
+          setConnectionState('checking');
+        }
       };
+      
       pc.onicegatheringstatechange = () => {
         appendLog(`ICE gathering state: ${pc.iceGatheringState}`);
       };
+      
       pc.onsignalingstatechange = () => {
         appendLog(`Signaling state: ${pc.signalingState}`);
+      };
+      
+      // Log ICE candidates for debugging
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          appendLog(`ICE candidate: ${event.candidate.protocol} ${event.candidate.type}`);
+        }
       };
 
       // 3) Add the user's microphone audio.
       appendLog("Adding user audio track...");
-      const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, localStream);
-      });
+      try {
+        const localStream = await navigator.mediaDevices.getUserMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          } 
+        });
+        
+        // Store the local stream in the ref
+        localStreamRef.current = localStream;
+        
+        localStream.getTracks().forEach((track) => {
+          pc.addTrack(track, localStream);
+        });
+      } catch (mediaError) {
+        appendLog(`Media error: ${mediaError.message}`);
+        throw new Error(`Could not access microphone: ${mediaError.message}`);
+      }
 
       // 4) Set up ontrack handler to play incoming audio.
       pc.ontrack = (evt) => {
@@ -102,49 +336,103 @@ function RealtimeConnect() {
             // Set the stream to the audio element
             audioEl.srcObject = evt.streams[0];
             audioEl.volume = 1.0;
-            audioEl.play()
-              .then(() => appendLog("Playback started"))
-              .catch((err) => appendLog(`Play failed: ${err.message}`));
-          } catch (err) {
-            appendLog(`Audio setup error: ${err.message}`);
+            
+            // Handle audio playback errors
+            audioEl.onerror = (e) => {
+              appendLog(`Audio playback error: ${e}`);
+            };
+            
+            audioEl.play().catch(playError => {
+              appendLog(`Audio play error: ${playError.message}`);
+              // Try again with user interaction
+              appendLog("Audio playback requires user interaction. Please click anywhere on the page.");
+            });
+          } catch (audioError) {
+            appendLog(`Audio setup error: ${audioError.message}`);
           }
         }
       };
 
       // 5) Create a local SDP offer.
-      const offer = await pc.createOffer();
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        voiceActivityDetection: true
+      });
       appendLog("Local SDP offer created.");
       await pc.setLocalDescription(offer);
 
-      // 6) Wait for ICE gathering to complete.
-      await new Promise((resolve) => {
-        if (pc.iceGatheringState === "complete") {
-          resolve();
-        } else {
-          const checkState = () => {
-            if (pc.iceGatheringState === "complete") {
-              pc.removeEventListener("icegatheringstatechange", checkState);
-              resolve();
-            }
-          };
-          pc.addEventListener("icegatheringstatechange", checkState);
-        }
-      });
-      appendLog("ICE gathering complete.");
+      // 6) Wait for ICE gathering to complete or timeout
+      appendLog("Waiting for ICE gathering to complete...");
+      await Promise.race([
+        new Promise(resolve => {
+          if (pc.iceGatheringState === "complete") {
+            resolve();
+          } else {
+            const checkState = () => {
+              if (pc.iceGatheringState === "complete") {
+                pc.removeEventListener("icegatheringstatechange", checkState);
+                resolve();
+              }
+            };
+            pc.addEventListener("icegatheringstatechange", checkState);
+          }
+        }),
+        // Add a timeout to prevent waiting indefinitely
+        new Promise(resolve => {
+          setTimeout(() => {
+            // Continue anyway after timeout, just log it
+            appendLog("ICE gathering timed out, continuing with available candidates");
+            resolve();
+          }, 5000); // 5 second timeout
+        })
+      ]);
+      appendLog("ICE gathering complete or timed out.");
 
       // 7) Send the SDP offer to the OpenAI Realtime API.
       appendLog("Sending SDP offer to OpenAI Realtime API...");
       const baseUrl = "https://api.openai.com/v1/realtime";
       const model = "gpt-4o-realtime-preview-2024-12-17";
-      const sdpResp = await fetch(`${baseUrl}?model=${model}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${ephemeralKey}`,
-          "Content-Type": "application/sdp",
-        },
-        body: offer.sdp,
-      });
-      if (!sdpResp.ok) throw new Error("OpenAI Realtime handshake failed");
+      
+      // Add retry logic for API call
+      let retries = 0;
+      const maxRetries = 3;
+      let sdpResp;
+      
+      while (retries < maxRetries) {
+        try {
+          sdpResp = await fetch(`${baseUrl}?model=${model}`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${ephemeralKey}`,
+              "Content-Type": "application/sdp",
+            },
+            body: offer.sdp,
+          });
+          
+          if (sdpResp.ok) break;
+          
+          // If we get a 429 or 500+ error, retry
+          if (sdpResp.status === 429 || sdpResp.status >= 500) {
+            retries++;
+            const backoff = Math.pow(2, retries) * 1000; // Exponential backoff
+            appendLog(`API call failed with status ${sdpResp.status}. Retrying in ${backoff/1000}s...`);
+            await new Promise(r => setTimeout(r, backoff));
+          } else {
+            // For other errors, don't retry
+            throw new Error(`API returned status ${sdpResp.status}`);
+          }
+        } catch (fetchError) {
+          retries++;
+          if (retries >= maxRetries) throw fetchError;
+          
+          const backoff = Math.pow(2, retries) * 1000;
+          appendLog(`API call failed: ${fetchError.message}. Retrying in ${backoff/1000}s...`);
+          await new Promise(r => setTimeout(r, backoff));
+        }
+      }
+      
+      if (!sdpResp.ok) throw new Error("OpenAI Realtime handshake failed after retries");
+      
       const answerSDP = await sdpResp.text();
       appendLog("Received SDP answer from OpenAI.");
 
@@ -157,14 +445,49 @@ function RealtimeConnect() {
       console.error("Connection error:", err);
       alert("Connection error: " + err.message);
       setIsConnecting(false);
+      
+      // If this was an initial connection attempt, try reconnecting
+      if (reconnectAttemptsRef.current === 0) {
+        attemptReconnect();
+      }
     }
   }
 
   const handleEndCall = () => {
-    // Implementation to end the call
+    appendLog("Ending call...");
+    
+    // Close the peer connection
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    
+    // Stop all local tracks
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    
+    // Reset connection state
+    setConnectionState('closed');
     setCallActive(false);
-    // Add logic to close the WebRTC connection
+    setIsConnecting(false);
+    
     window.history.back();
+  };
+
+  const handleMuteToggle = () => {
+    if (!localStreamRef.current) return;
+    
+    // Toggle mute state
+    setIsMuted(!isMuted);
+    
+    // Actually mute/unmute the audio tracks
+    localStreamRef.current.getAudioTracks().forEach(track => {
+      track.enabled = isMuted; // If currently muted, enable tracks
+    });
+    
+    appendLog(`Microphone ${isMuted ? 'unmuted' : 'muted'}`);
   };
 
   return (
@@ -177,6 +500,17 @@ function RealtimeConnect() {
         style={{ display: "none" }}
       />
       
+      {/* Connection status indicator */}
+      <div className={styles.connectionIndicator}>
+        <div 
+          className={styles.statusDot}
+          style={{ backgroundColor: getConnectionStateColor(connectionState) }}
+        ></div>
+        <span className={styles.statusText}>
+          {getConnectionStatusText(connectionState)}
+        </span>
+      </div>
+      
       {/* Call header */}
       <div className={styles.callHeader}>
         <div className={styles.callPrice}>{callInfo.price}</div>
@@ -187,7 +521,9 @@ function RealtimeConnect() {
       {/* Visualizer area */}
       <div className={styles.visualizerContainer}>
         {isConnecting ? (
-          <div className={styles.connecting}>Connecting...</div>
+          <div className={styles.loadingContainer}>
+            <div className={styles.spinner}></div>
+          </div>
         ) : (
           <AudioVisualizer mediaStream={remoteMediaStreamRef.current} />
         )}
@@ -195,17 +531,20 @@ function RealtimeConnect() {
       
       {/* Call controls */}
       <div className={styles.controlsContainer}>
-        <button className={`${styles.controlButton} ${styles.micButton}`}>
-          <i className="microphone-icon">🎙️</i>
+        <button 
+          className={`${styles.controlButton} ${styles.micButton} ${isMuted ? styles.muted : ''}`}
+          onClick={handleMuteToggle}
+        >
+          <img src="/assets/mute.svg" alt="Mute" />
         </button>
         <button className={`${styles.controlButton} ${styles.optionsButton}`}>
-          <i className="options-icon">⋯</i>
+          <img src="/assets/dots.svg" alt="Options" />
         </button>
         <button 
           className={`${styles.controlButton} ${styles.endCallButton}`}
           onClick={handleEndCall}
         >
-          <i className="end-call-icon">✕</i>
+          <img src="/assets/x.svg" alt="End Call" />
         </button>
       </div>
       

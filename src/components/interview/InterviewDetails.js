@@ -119,12 +119,8 @@ const InterviewDetails = () => {
           <div className={styles.interview_info}>
             <div className={styles.interview_details}>
               <h2>{interview.name}</h2>
-              <div className={styles.interview_scope}>
-                <h3>Scope</h3>
-                <p>{interview.scope}</p>
-              </div>
               <div className={styles.interview_description}>
-                <h3>Description</h3>
+
                 <p>{interview.description}</p>
               </div>
             </div>
