@@ -110,8 +110,8 @@ const AccessCode = () => {
           </div>
 
           <footer className={styles.access_footer}>
-            <a href="/need-help">Need help?</a>
-            <a href="/about-reach">About Reach</a>
+            <a href="mailto:maxricodecastro@gmail.com">Need help?</a>
+            <a href="https://www.use-reach.com" target="_blank" rel="noopener noreferrer">About Reach</a>
           </footer>
         </div>
       </div>
