@@ -97,9 +97,9 @@
 }
 
 .arrow_icon {
-  width: 16px;
-  height: 16px;
-  margin-left: 8px;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
 }
 
 .submit_button {
@@ -114,7 +114,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  font-weight: 650;
 }
 
 .submit_button:hover {
