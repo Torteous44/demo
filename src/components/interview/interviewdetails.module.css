@@ -42,12 +42,12 @@
 .subtitle {
   font-size: 1rem;
   color: #4B5563;
-  margin-bottom: 3rem;
+  margin-bottom: 2.5rem;
 }
 
 .signupText {
   color: #6B7280;
-  font-size: 1rem;
+  font-size: 0.9rem;
   margin-bottom: 1rem;
 }
 
@@ -127,36 +127,59 @@
 
 .secondaryButton {
   flex: 1;
-  padding: 0.75rem 1.5rem;
-  border: 1px solid #D1D5DB;
-  border-radius: 24px;
+  padding: 12px;
+  border: 1.5px solid #D1D5DB;
+  border-radius: 12px;
   background: white;
-  color: #374151;
-  font-size: 1rem;
-  font-weight: 500;
+  color: #313947;
+  font-size: 14px;
+  font-weight: 550;
   cursor: pointer;
-  transition: background-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
 }
 
 .secondaryButton:hover {
   background-color: #F3F4F6;
 }
 
+.secondaryButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .primaryButton {
   flex: 1;
-  padding: 0.75rem 1.5rem;
+  padding: 12px;
   border: none;
-  border-radius: 24px;
-  background: #3B82F6;
+  border-radius: 12px;
+  background-color: #2AA8FF;
   color: white;
-  font-size: 1rem;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 800;
   cursor: pointer;
-  transition: background-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
 }
 
 .primaryButton:hover {
-  background-color: #2563EB;
+  background-color: #1e95e5;
+}
+
+.primaryButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  background-color: #94d3ff;
+}
+
+.arrow_icon {
+  width: 16px;
+  height: 16px;
+  margin-left: 8px;
 }
 
 .loading, .error {

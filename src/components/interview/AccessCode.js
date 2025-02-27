@@ -51,19 +51,33 @@ const AccessCode = () => {
     }
   };
 
-  // Update the grid cell hover function
-  const handleGridCellHover = (index) => {
-    // No need to do anything on hover - CSS handles this
+  // Replace the old handleGridCellLeave function with these new functions
+  const handleGridCellEnter = (index) => {
+    const cell = document.querySelector(`.${styles.grid_cell}[data-index="${index}"]`);
+    if (cell) {
+      // Clear any existing animations
+      cell.classList.remove(styles.trail);
+      // Force a reflow
+      void cell.offsetWidth;
+      cell.classList.add(styles.hover);
+    }
   };
 
-  // Add a new function to handle mouse leave
   const handleGridCellLeave = (index) => {
     const cell = document.querySelector(`.${styles.grid_cell}[data-index="${index}"]`);
     if (cell) {
+      cell.classList.remove(styles.hover);
+      // Force a reflow
+      void cell.offsetWidth;
       cell.classList.add(styles.trail);
-      setTimeout(() => {
+      
+      // Cleanup after animation
+      const cleanup = () => {
         cell.classList.remove(styles.trail);
-      }, 1000);
+        cell.removeEventListener('animationend', cleanup);
+      };
+      
+      cell.addEventListener('animationend', cleanup);
     }
   };
 
@@ -104,7 +118,16 @@ const AccessCode = () => {
                 className={styles.submit_button}
                 disabled={isLoading || accessCode.length !== 4}
               >
-                {isLoading ? 'Loading...' : 'Submit →'}
+                {isLoading ? 'Loading...' : (
+                  <>
+                    Submit
+                    <img 
+                      src="/assets/arrowRight.svg" 
+                      alt="" 
+                      className={styles.arrow_icon}
+                    />
+                  </>
+                )}
               </button>
             </form>
           </div>
@@ -127,6 +150,7 @@ const AccessCode = () => {
             key={index} 
             className={styles.grid_cell} 
             data-index={index}
+            onMouseEnter={() => handleGridCellEnter(index)}
             onMouseLeave={() => handleGridCellLeave(index)}
           />
         ))}

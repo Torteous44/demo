@@ -522,7 +522,7 @@ function RealtimeConnect() {
       // 7) Send the SDP offer to the OpenAI Realtime API.
       appendLog("Sending SDP offer to OpenAI Realtime API...");
       const baseUrl = "https://api.openai.com/v1/realtime";
-      const model = "gpt-4o-realtime-preview-2024-12-17";
+      const model = "gpt-4o-mini-realtime-preview";
       
       // Add retry logic for API call
       let retries = 0;
@@ -724,7 +724,7 @@ function RealtimeConnect() {
       const rtData = await rtResp.json();
       const ephemeralKey = rtData.client_secret.value;
 
-      const sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17`, {
+      const sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${ephemeralKey}`,

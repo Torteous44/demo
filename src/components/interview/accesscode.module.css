@@ -96,6 +96,12 @@
   border-color: #2AA8FF;
 }
 
+.arrow_icon {
+  width: 16px;
+  height: 16px;
+  margin-left: 8px;
+}
+
 .submit_button {
   width: 100%;
   background-color: #2AA8FF;
@@ -108,6 +114,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
 }
 
 .submit_button:hover {
@@ -163,6 +170,8 @@
   overflow: hidden;
   border-radius: 4px;
   background-color: white;
+  will-change: opacity;
+  transform: translateZ(0);
 }
 
 .grid_cell::before {
@@ -184,16 +193,15 @@
   pointer-events: none;
 }
 
-.grid_cell:hover::after {
+.grid_cell.hover::after {
   opacity: 0.3;
 }
 
 .grid_cell.trail::after {
-  opacity: 0.2;
-  animation: fadeOut 1s forwards;
+  animation: trailEffect 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
-@keyframes fadeOut {
+@keyframes trailEffect {
   0% { opacity: 0.2; }
   100% { opacity: 0; }
 }

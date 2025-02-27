@@ -161,7 +161,12 @@ const InterviewDetails = () => {
             className={styles.primaryButton}
             onClick={handleStart}
           >
-            Continue →
+            Start Interview
+            <img 
+              src="/assets/arrowRight.svg" 
+              alt="" 
+              className={styles.arrow_icon}
+            />
           </button>
         </div>
       </div>
