@@ -386,3 +386,23 @@
     opacity: 1;
   }
 }
+
+.footer {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  display: flex;
+  gap: 20px;
+  z-index: 10;
+}
+
+.footer a {
+  color: #666;
+  text-decoration: none;
+  font-size: 14px;
+  transition: color 0.2s ease;
+}
+
+.footer a:hover {
+  color: #333;
+}

@@ -1130,6 +1130,12 @@ function RealtimeConnect() {
           ))}
         </div>
       </div>
+
+      {/* Add footer */}
+      <footer className={styles.footer}>
+        <a href="mailto:maxricodecastro@gmail.com">Need help?</a>
+        <a href="https://www.use-reach.com" target="_blank" rel="noopener noreferrer">About Reach</a>
+      </footer>
     </div>
   );
 }
