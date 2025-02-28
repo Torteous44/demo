@@ -52,6 +52,34 @@ function RealtimeConnect() {
   // Add notification timeout ref
   const notificationTimeoutRef = useRef(null);
 
+  // Add new state and refs for transcription
+  const [transcripts, setTranscripts] = useState([]);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const assemblyWsRef = useRef(null);
+
+  // Add new ref for AI WebSocket and audio context
+  const aiAssemblyWsRef = useRef(null);
+  const aiAudioContextRef = useRef(null);
+  const aiProcessorRef = useRef(null);
+
+  // Add new state for tracking AI transcription
+  const [isAiTranscribing, setIsAiTranscribing] = useState(false);
+
+  // Add ref for user WebSocket
+  const userAssemblyWsRef = useRef(null);
+  const userAudioContextRef = useRef(null);
+  const userProcessorRef = useRef(null);
+
+  // Add state for user transcription
+  const [isUserTranscribing, setIsUserTranscribing] = useState(false);
+
+  // Add a new ref to track the last transcript
+  const lastTranscriptRef = useRef({
+    text: '',
+    speaker: '',
+    timestamp: ''
+  });
+
   // Set call info from navigation state
   useEffect(() => {
     if (location.state) {
@@ -236,6 +264,47 @@ function RealtimeConnect() {
         remoteMediaStreamRef.current = new MediaStream();
       }
       
+      // Clean up transcription
+      if (assemblyWsRef.current) {
+        assemblyWsRef.current.close();
+        assemblyWsRef.current = null;
+      }
+      
+      // Clean up AI transcription resources
+      if (aiAssemblyWsRef.current) {
+        aiAssemblyWsRef.current.close();
+        aiAssemblyWsRef.current = null;
+      }
+      
+      if (aiProcessorRef.current) {
+        aiProcessorRef.current.disconnect();
+        aiProcessorRef.current = null;
+      }
+      
+      if (aiAudioContextRef.current) {
+        aiAudioContextRef.current.close();
+        aiAudioContextRef.current = null;
+      }
+      
+      // Clean up user transcription resources
+      if (userAssemblyWsRef.current) {
+        userAssemblyWsRef.current.close();
+        userAssemblyWsRef.current = null;
+      }
+      
+      if (userProcessorRef.current) {
+        userProcessorRef.current.disconnect();
+        userProcessorRef.current = null;
+      }
+      
+      if (userAudioContextRef.current) {
+        userAudioContextRef.current.close();
+        userAudioContextRef.current = null;
+      }
+      
+      setIsAiTranscribing(false);
+      setIsUserTranscribing(false);
+      
       appendLog("Cleanup complete");
     };
   }, [sessionId]);
@@ -285,7 +354,201 @@ function RealtimeConnect() {
     }, duration);
   };
 
-  // Update handleConnect to use notifications instead of alerts
+  // Add the AI transcription initialization function
+  const initializeAiTranscription = async () => {
+    try {
+      appendLog("Initializing AI transcription...");
+      
+      // Get temporary token
+      const jwtToken = localStorage.getItem("token");
+      const response = await fetch('https://demobackend-p2e1.onrender.com/transcription/assembly-token', {
+        headers: { 
+          Authorization: `Bearer ${jwtToken}`,
+          Accept: 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to get AI token: ${await response.text()}`);
+      }
+      
+      const { token: aiTempToken } = await response.json();
+      const SAMPLE_RATE = 16000;
+      const wsUrl = `wss://api.assemblyai.com/v2/realtime/ws?sample_rate=${SAMPLE_RATE}&token=${encodeURIComponent(aiTempToken)}`;
+      
+      const aiWs = new WebSocket(wsUrl);
+      aiAssemblyWsRef.current = aiWs;
+
+      aiWs.onopen = () => {
+        appendLog("AI WebSocket connected");
+        setIsAiTranscribing(true);
+        
+        // Set up audio processing once WebSocket is open
+        if (remoteMediaStreamRef.current) {
+          aiAudioContextRef.current = new AudioContext({ sampleRate: SAMPLE_RATE });
+          const source = aiAudioContextRef.current.createMediaStreamSource(remoteMediaStreamRef.current);
+          const processor = aiAudioContextRef.current.createScriptProcessor(2048, 1, 1);
+          aiProcessorRef.current = processor;
+          
+          processor.onaudioprocess = (e) => {
+            if (aiWs.readyState === WebSocket.OPEN) {
+              const inputData = e.inputBuffer.getChannelData(0);
+              const int16Data = convertFloat32ToInt16(inputData);
+              aiWs.send(int16Data);
+            }
+          };
+          
+          source.connect(processor);
+          processor.connect(aiAudioContextRef.current.destination);
+          appendLog("AI audio processing pipeline established");
+        }
+      };
+
+      aiWs.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.message_type === 'FinalTranscript') {
+            // Check if this is a duplicate of the last transcript
+            if (lastTranscriptRef.current.text === message.text && 
+                lastTranscriptRef.current.speaker === 'AI') {
+              return; // Skip duplicate transcript
+            }
+            
+            // Update last transcript
+            lastTranscriptRef.current = {
+              text: message.text,
+              speaker: 'AI',
+              timestamp: new Date().toISOString()
+            };
+
+            setTranscripts(prev => [
+              ...prev,
+              {
+                text: message.text,
+                speaker: 'AI',
+                timestamp: new Date().toISOString()
+              }
+            ]);
+          }
+        } catch (error) {
+          appendLog(`Error processing AI message: ${error.message}`);
+        }
+      };
+
+      aiWs.onerror = (error) => {
+        appendLog(`AI WebSocket error: ${error.message || 'Unknown error'}`);
+        showNotification("AI transcription error occurred", "error");
+      };
+
+      aiWs.onclose = () => {
+        setIsAiTranscribing(false);
+        appendLog("AI WebSocket closed");
+      };
+
+    } catch (error) {
+      appendLog(`Failed to initialize AI transcription: ${error.message}`);
+      showNotification(`AI transcription unavailable: ${error.message}`, "error");
+    }
+  };
+
+  // Add user transcription initialization function
+  const initializeUserTranscription = async () => {
+    try {
+      appendLog("Initializing user transcription...");
+      
+      // Get temporary token
+      const jwtToken = localStorage.getItem("token");
+      const response = await fetch('https://demobackend-p2e1.onrender.com/transcription/assembly-token', {
+        headers: { 
+          Authorization: `Bearer ${jwtToken}`,
+          Accept: 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to get user token: ${await response.text()}`);
+      }
+      
+      const { token: userTempToken } = await response.json();
+      const SAMPLE_RATE = 16000;
+      const wsUrl = `wss://api.assemblyai.com/v2/realtime/ws?sample_rate=${SAMPLE_RATE}&token=${encodeURIComponent(userTempToken)}`;
+      
+      const userWs = new WebSocket(wsUrl);
+      userAssemblyWsRef.current = userWs;
+
+      userWs.onopen = () => {
+        appendLog("User WebSocket connected");
+        setIsUserTranscribing(true);
+        
+        // Set up audio processing once WebSocket is open
+        if (localStreamRef.current) {
+          userAudioContextRef.current = new AudioContext({ sampleRate: SAMPLE_RATE });
+          const source = userAudioContextRef.current.createMediaStreamSource(localStreamRef.current);
+          const processor = userAudioContextRef.current.createScriptProcessor(2048, 1, 1);
+          userProcessorRef.current = processor;
+          
+          processor.onaudioprocess = (e) => {
+            if (userWs.readyState === WebSocket.OPEN) {
+              const inputData = e.inputBuffer.getChannelData(0);
+              const int16Data = convertFloat32ToInt16(inputData);
+              userWs.send(int16Data);
+            }
+          };
+          
+          source.connect(processor);
+          processor.connect(userAudioContextRef.current.destination);
+          appendLog("User audio processing pipeline established");
+        }
+      };
+
+      userWs.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.message_type === 'FinalTranscript') {
+            // Check if this is a duplicate of the last transcript
+            if (lastTranscriptRef.current.text === message.text && 
+                lastTranscriptRef.current.speaker === 'User') {
+              return; // Skip duplicate transcript
+            }
+            
+            // Update last transcript
+            lastTranscriptRef.current = {
+              text: message.text,
+              speaker: 'User',
+              timestamp: new Date().toISOString()
+            };
+
+            setTranscripts(prev => [
+              ...prev,
+              {
+                text: message.text,
+                speaker: 'User',
+                timestamp: new Date().toISOString()
+              }
+            ]);
+          }
+        } catch (error) {
+          appendLog(`Error processing user message: ${error.message}`);
+        }
+      };
+
+      userWs.onerror = (error) => {
+        appendLog(`User WebSocket error: ${error.message || 'Unknown error'}`);
+        showNotification("User transcription error occurred", "error");
+      };
+
+      userWs.onclose = () => {
+        setIsUserTranscribing(false);
+        appendLog("User WebSocket closed");
+      };
+
+    } catch (error) {
+      appendLog(`Failed to initialize user transcription: ${error.message}`);
+      showNotification(`User transcription unavailable: ${error.message}`, "error");
+    }
+  };
+
+  // Update handleConnect to initialize transcription after WebRTC connection
   async function handleConnect() {
     // Reset connection state if reconnecting
     if (peerConnectionRef.current) {
@@ -445,6 +708,10 @@ function RealtimeConnect() {
         localStream.getTracks().forEach((track) => {
           pc.addTrack(track, localStream);
         });
+
+        // Initialize user transcription once we have the local stream
+        initializeUserTranscription();
+
       } catch (mediaError) {
         appendLog(`Media error: ${mediaError.message}`);
         throw new Error(`Could not access microphone: ${mediaError.message}`);
@@ -455,31 +722,22 @@ function RealtimeConnect() {
         appendLog("🎵 Track received: " + evt.track.kind);
         if (evt.track.kind === "audio") {
           try {
-            // Store the AI audio stream in the ref for the visualizer
             remoteMediaStreamRef.current = evt.streams[0];
             
+            // Set up audio playback
             const audioEl = audioRef.current;
-            if (!audioEl) {
-              appendLog(" Audio element not found!");
-              return;
+            if (audioEl) {
+              audioEl.srcObject = evt.streams[0];
+              audioEl.play().catch(error => {
+                appendLog(`Audio play error: ${error.message}`);
+              });
             }
             
-            // Set the stream to the audio element
-            audioEl.srcObject = evt.streams[0];
-            audioEl.volume = 1.0;
+            // Initialize AI transcription once we have the remote stream
+            initializeAiTranscription();
             
-            // Handle audio playback errors
-            audioEl.onerror = (e) => {
-              appendLog(`Audio playback error: ${e}`);
-            };
-            
-            audioEl.play().catch(playError => {
-              appendLog(`Audio play error: ${playError.message}`);
-              // Try again with user interaction
-              appendLog("Audio playback requires user interaction. Please click anywhere on the page.");
-            });
-          } catch (audioError) {
-            appendLog(`Audio setup error: ${audioError.message}`);
+          } catch (error) {
+            appendLog(`Audio setup error: ${error.message}`);
           }
         }
       };
@@ -755,6 +1013,17 @@ function RealtimeConnect() {
     }
   };
 
+  // Add helper function for audio conversion
+  function convertFloat32ToInt16(buffer) {
+    const l = buffer.length;
+    const buf = new Int16Array(l);
+    for (let i = 0; i < l; i++) {
+      const s = Math.max(-1, Math.min(1, buffer[i]));
+      buf[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    return buf.buffer;
+  }
+
   return (
     <div className={styles.container}>
       {/* Add notification component */}
@@ -835,6 +1104,32 @@ function RealtimeConnect() {
           </pre>
         </div>
       )}
+      
+      {/* Updated transcript panel */}
+      <div className={styles.transcriptPanel}>
+        <div className={styles.transcriptHeader}>
+          <span>Transcript:</span>
+          <img src="/assets/chat.svg" alt="Transcript" width="20" height="20" />
+        </div>
+        <div className={styles.transcriptContent}>
+          {transcripts.map((transcript, index) => (
+            <div key={index} className={styles.transcriptEntry}>
+              <span className={styles.timestamp}>
+                {new Date(transcript.timestamp).toLocaleTimeString([], { 
+                  hour12: false,
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}:
+              </span>
+              <span className={`${styles.transcriptText} ${
+                transcript.speaker === 'AI' ? styles.aiText : styles.userText
+              }`}>
+                "{transcript.text}"
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
