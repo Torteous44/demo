@@ -1,60 +1,84 @@
 // interview-frontend/src/components/RealtimeConnect.js
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useReducer } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
 import AudioVisualizer from "./AudioVisualizer";
 import styles from "./realtimeconnect.module.css";
+
+function connectionReducer(state, action) {
+  switch (action.type) {
+    case 'SET_CONNECTING':
+      return { ...state, isConnecting: action.payload };
+    case 'SET_CALL_ACTIVE':
+      return { ...state, callActive: action.payload };
+    case 'SET_CONNECTION_STATE':
+      return { ...state, connectionState: action.payload };
+    case 'SET_NETWORK_QUALITY':
+      return { ...state, networkQuality: action.payload };
+    case 'ADD_TRANSCRIPT':
+      return { ...state, transcripts: [...state.transcripts, action.payload] };
+    case 'SET_NOTIFICATION':
+      return { ...state, notification: action.payload };
+    case 'SET_MUTED':
+      return { ...state, isMuted: action.payload };
+    case 'SET_CALL_DURATION':
+      return { ...state, callDuration: action.payload };
+    case 'SET_CALL_START_TIME':
+      return { ...state, callStartTime: action.payload };
+    default:
+      return state;
+  }
+}
 
 function RealtimeConnect() {
   const { sessionId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const [log, setLog] = useState("");
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [callActive, setCallActive] = useState(false);
+  
+  // Replace multiple state variables with useReducer
+  const [state, dispatch] = useReducer(connectionReducer, {
+    isConnecting: false,
+    callActive: false,
+    connectionState: 'new',
+    networkQuality: 'unknown',
+    isMuted: false,
+    callStartTime: null,
+    callDuration: 0,
+    transcripts: [],
+    notification: {
+      show: false,
+      message: '',
+      type: 'info'
+    }
+  });
+  
   const [callInfo, setCallInfo] = useState({
     title: "Loading...",
     host: "Loading...",
     price: "$5.00 call"
   });
   
-  // Reference to the remote MediaStream for AI audio
+  // Keep your refs as they are
   const remoteMediaStreamRef = useRef(new MediaStream());
-  // Reference for the audio element
   const audioRef = useRef(null);
-  // Reference to store the RTCPeerConnection
   const peerConnectionRef = useRef(null);
-  // Reference to store local stream
   const localStreamRef = useRef(null);
-  // Reference for reconnection attempts
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 5;
   const reconnectTimeoutRef = useRef(null);
-
-  const [isMuted, setIsMuted] = useState(false);
-  const [connectionState, setConnectionState] = useState('new');
-  const [networkQuality, setNetworkQuality] = useState('unknown');
-  const [callStartTime, setCallStartTime] = useState(null);
-  const [callDuration, setCallDuration] = useState(0);
-  const durationIntervalRef = useRef(null);
-
-  // Add new state for tracking ICE restart attempts
+  
+  // Reference for reconnection attempts
   const iceRestartAttemptsRef = useRef(0);
   const maxIceRestarts = 3;
   const iceRestartTimeoutRef = useRef(null);
 
-  // Add new state for notifications
-  const [notification, setNotification] = useState({
-    show: false,
-    message: '',
-    type: 'info' // 'info', 'error', 'warning', 'success'
-  });
-
   // Add notification timeout ref
   const notificationTimeoutRef = useRef(null);
+  
+  // Add duration interval ref
+  const durationIntervalRef = useRef(null);
 
   // Add new state and refs for transcription
-  const [transcripts, setTranscripts] = useState([]);
-  const [isTranscribing, setIsTranscribing] = useState(false);
   const assemblyWsRef = useRef(null);
 
   // Add new ref for AI WebSocket and audio context
@@ -123,12 +147,16 @@ function RealtimeConnect() {
         let totalPacketsLost = 0;
         let totalPackets = 0;
         let currentRtt = 0;
+        let jitter = 0;
         
         stats.forEach(stat => {
           // Look for inbound-rtp stats to check packet loss
           if (stat.type === 'inbound-rtp' && stat.packetsLost !== undefined) {
             totalPacketsLost += stat.packetsLost;
             totalPackets += stat.packetsReceived;
+            if (stat.jitter !== undefined) {
+              jitter = Math.max(jitter, stat.jitter);
+            }
           }
           
           // Look for remote-inbound-rtp for RTT (Round Trip Time)
@@ -140,20 +168,25 @@ function RealtimeConnect() {
         // Calculate packet loss percentage
         const packetLossPercent = totalPackets > 0 ? (totalPacketsLost / totalPackets) * 100 : 0;
         
-        // Determine connection quality
+        // Determine connection quality with more granular thresholds
         let quality = 'excellent';
-        if (packetLossPercent > 10 || currentRtt > 0.3) {
+        if (packetLossPercent > 10 || currentRtt > 0.3 || jitter > 0.05) {
           quality = 'poor';
-        } else if (packetLossPercent > 3 || currentRtt > 0.15) {
+        } else if (packetLossPercent > 5 || currentRtt > 0.15 || jitter > 0.03) {
           quality = 'fair';
-        } else if (packetLossPercent > 1 || currentRtt > 0.05) {
+        } else if (packetLossPercent > 1 || currentRtt > 0.05 || jitter > 0.01) {
           quality = 'good';
         }
         
-        setNetworkQuality(quality);
+        dispatch({ type: 'SET_NETWORK_QUALITY', payload: quality });
         
         // Log connection stats for debugging
-        appendLog(`Connection quality: ${quality} (loss: ${packetLossPercent.toFixed(1)}%, RTT: ${(currentRtt * 1000).toFixed(0)}ms)`);
+        appendLog(`Connection quality: ${quality} (loss: ${packetLossPercent.toFixed(1)}%, RTT: ${(currentRtt * 1000).toFixed(0)}ms, jitter: ${(jitter * 1000).toFixed(1)}ms)`);
+        
+        // If quality is poor, consider proactive measures
+        if (quality === 'poor' && state.callActive) {
+          showNotification("Connection quality is poor. Consider switching to a more stable network.", "warning", 10000);
+        }
       } catch (err) {
         console.error("Error getting connection stats:", err);
       }
@@ -166,7 +199,7 @@ function RealtimeConnect() {
   const attemptReconnect = async () => {
     if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
       appendLog("Maximum reconnection attempts reached. Please try again later.");
-      setIsConnecting(false);
+      dispatch({ type: 'SET_CONNECTING', payload: false });
       return;
     }
     
@@ -335,22 +368,28 @@ function RealtimeConnect() {
     }
   };
 
-  // Add showNotification helper function
+  // Update showNotification helper function to use dispatch
   const showNotification = (message, type = 'info', duration = 5000) => {
     // Clear any existing timeout
     if (notificationTimeoutRef.current) {
       clearTimeout(notificationTimeoutRef.current);
     }
 
-    setNotification({
-      show: true,
-      message,
-      type
+    dispatch({
+      type: 'SET_NOTIFICATION',
+      payload: {
+        show: true,
+        message,
+        type
+      }
     });
 
     // Auto-hide notification after duration
     notificationTimeoutRef.current = setTimeout(() => {
-      setNotification(prev => ({ ...prev, show: false }));
+      dispatch({
+        type: 'SET_NOTIFICATION',
+        payload: { ...state.notification, show: false }
+      });
     }, duration);
   };
 
@@ -421,14 +460,14 @@ function RealtimeConnect() {
               timestamp: new Date().toISOString()
             };
 
-            setTranscripts(prev => [
-              ...prev,
-              {
+            dispatch({
+              type: 'ADD_TRANSCRIPT',
+              payload: {
                 text: message.text,
                 speaker: 'AI',
                 timestamp: new Date().toISOString()
               }
-            ]);
+            });
           }
         } catch (error) {
           appendLog(`Error processing AI message: ${error.message}`);
@@ -518,14 +557,14 @@ function RealtimeConnect() {
               timestamp: new Date().toISOString()
             };
 
-            setTranscripts(prev => [
-              ...prev,
-              {
+            dispatch({
+              type: 'ADD_TRANSCRIPT',
+              payload: {
                 text: message.text,
                 speaker: 'User',
                 timestamp: new Date().toISOString()
               }
-            ]);
+            });
           }
         } catch (error) {
           appendLog(`Error processing user message: ${error.message}`);
@@ -548,7 +587,132 @@ function RealtimeConnect() {
     }
   };
 
-  // Update handleConnect to initialize transcription after WebRTC connection
+  // Improved performIceRestart function with better error handling and backoff
+  const performIceRestart = async () => {
+    if (!peerConnectionRef.current || iceRestartAttemptsRef.current >= maxIceRestarts) {
+      appendLog("Cannot perform ICE restart - falling back to full reconnection");
+      attemptReconnect();
+      return;
+    }
+
+    try {
+      appendLog(`Attempting ICE restart (attempt ${iceRestartAttemptsRef.current + 1}/${maxIceRestarts})`);
+      iceRestartAttemptsRef.current++;
+
+      // Create new offer with iceRestart: true
+      const offer = await peerConnectionRef.current.createOffer({ 
+        iceRestart: true,
+        offerToReceiveAudio: true,
+        voiceActivityDetection: true
+      });
+      
+      await peerConnectionRef.current.setLocalDescription(offer);
+      
+      // Wait for ICE gathering with timeout and better error handling
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          const checkState = () => {
+            if (!peerConnectionRef.current) {
+              reject(new Error("PeerConnection was closed during ICE gathering"));
+              return;
+            }
+            
+            if (peerConnectionRef.current.iceGatheringState === "complete") {
+              peerConnectionRef.current.removeEventListener("icegatheringstatechange", checkState);
+              resolve();
+            }
+          };
+          
+          if (peerConnectionRef.current.iceGatheringState === "complete") {
+            resolve();
+          } else {
+            peerConnectionRef.current.addEventListener("icegatheringstatechange", checkState);
+          }
+        }),
+        new Promise(resolve => setTimeout(() => {
+          appendLog("ICE gathering timed out, continuing with available candidates");
+          resolve();
+        }, 5000))
+      ]);
+
+      // Get new ephemeral token and send offer to OpenAI
+      const jwtToken = localStorage.getItem("token");
+      const rtResp = await fetch(`https://demobackend-p2e1.onrender.com/realtime/token?session_id=${sessionId}`, {
+        headers: { Authorization: `Bearer ${jwtToken}` },
+      });
+      
+      if (!rtResp.ok) {
+        throw new Error(`Failed to get token: ${await rtResp.text()}`);
+      }
+      
+      const rtData = await rtResp.json();
+      const ephemeralKey = rtData.client_secret.value;
+
+      // Add retry logic for API call
+      let retries = 0;
+      const maxRetries = 3;
+      let sdpResp;
+      
+      while (retries < maxRetries) {
+        try {
+          sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${ephemeralKey}`,
+              "Content-Type": "application/sdp",
+            },
+            body: offer.sdp,
+          });
+          
+          if (sdpResp.ok) break;
+          
+          // If we get a 429 or 500+ error, retry
+          if (sdpResp.status === 429 || sdpResp.status >= 500) {
+            retries++;
+            const backoff = Math.pow(2, retries) * 1000; // Exponential backoff
+            appendLog(`API call failed with status ${sdpResp.status}. Retrying in ${backoff/1000}s...`);
+            await new Promise(r => setTimeout(r, backoff));
+          } else {
+            // For other errors, don't retry
+            throw new Error(`API returned status ${sdpResp.status}`);
+          }
+        } catch (fetchError) {
+          retries++;
+          if (retries >= maxRetries) throw fetchError;
+          
+          const backoff = Math.pow(2, retries) * 1000;
+          appendLog(`API call failed: ${fetchError.message}. Retrying in ${backoff/1000}s...`);
+          await new Promise(r => setTimeout(r, backoff));
+        }
+      }
+
+      if (!sdpResp.ok) throw new Error("OpenAI Realtime handshake failed after retries");
+
+      const answerSDP = await sdpResp.text();
+      await peerConnectionRef.current.setRemoteDescription({ type: "answer", sdp: answerSDP });
+      
+      appendLog("ICE restart completed successfully");
+      iceRestartAttemptsRef.current = 0; // Reset counter on success
+      
+      // Update connection state
+      dispatch({ type: 'SET_CONNECTION_STATE', payload: 'checking' });
+      
+    } catch (err) {
+      appendLog(`ICE restart failed: ${err.message}`);
+      // If ICE restart fails, try again with exponential backoff or fall back to full reconnect
+      const backoffTime = Math.min(1000 * Math.pow(2, iceRestartAttemptsRef.current), 5000);
+      
+      if (iceRestartAttemptsRef.current < maxIceRestarts) {
+        appendLog(`Retrying ICE restart in ${backoffTime/1000}s...`);
+        iceRestartTimeoutRef.current = setTimeout(performIceRestart, backoffTime);
+      } else {
+        appendLog("Maximum ICE restarts attempted, falling back to full reconnection");
+        attemptReconnect();
+      }
+    }
+  };
+
+  // Improved handleConnect function with better ICE configuration
   async function handleConnect() {
     // Reset connection state if reconnecting
     if (peerConnectionRef.current) {
@@ -556,10 +720,9 @@ function RealtimeConnect() {
       peerConnectionRef.current = null;
     }
     
-    setIsConnecting(true);
+    dispatch({ type: 'SET_CONNECTING', payload: true });
     appendLog("Starting connection process...");
 
-    // Replace alert with notification
     const jwtToken = localStorage.getItem("token");
     if (!jwtToken) {
       showNotification("Please log in to continue", "error");
@@ -590,7 +753,7 @@ function RealtimeConnect() {
       const ephemeralKey = rtData.client_secret.value;
       appendLog("Got ephemeral key: " + ephemeralKey.substring(0, 15) + "...");
 
-      // 2) Create RTCPeerConnection with Twilio credentials
+      // 2) Create RTCPeerConnection with improved configuration
       appendLog("Creating RTCPeerConnection...");
       const configuration = {
         iceServers: [
@@ -599,11 +762,24 @@ function RealtimeConnect() {
           { urls: "stun:stun.l.google.com:19302" },
           // Google STUN servers as fallback
           { urls: "stun:stun1.l.google.com:19302" },
+          { urls: "stun:stun2.l.google.com:19302" },
+          { urls: "stun:stun3.l.google.com:19302" },
+          { urls: "stun:stun4.l.google.com:19302" },
           
           // OpenRelay as last resort fallback
           { urls: "stun:openrelay.metered.ca:80" },
           {
             urls: "turn:openrelay.metered.ca:80",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+          },
+          {
+            urls: "turn:openrelay.metered.ca:443",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+          },
+          {
+            urls: "turn:openrelay.metered.ca:443?transport=tcp",
             username: "openrelayproject",
             credential: "openrelayproject"
           }
@@ -619,22 +795,22 @@ function RealtimeConnect() {
       const pc = new RTCPeerConnection(configuration);
       peerConnectionRef.current = pc;
 
-      // Set up connection state change handler
+      // Set up connection state change handler with improved state management
       pc.onconnectionstatechange = () => {
         appendLog(`Connection state changed: ${pc.connectionState}`);
-        setConnectionState(pc.connectionState);
+        dispatch({ type: 'SET_CONNECTION_STATE', payload: pc.connectionState });
         
         if (pc.connectionState === 'connected') {
-          setCallActive(true);
-          setIsConnecting(false);
+          dispatch({ type: 'SET_CALL_ACTIVE', payload: true });
+          dispatch({ type: 'SET_CONNECTING', payload: false });
           reconnectAttemptsRef.current = 0;
           
           // Start tracking call duration
           const startTime = Date.now();
-          setCallStartTime(startTime);
+          dispatch({ type: 'SET_CALL_START_TIME', payload: startTime });
           durationIntervalRef.current = setInterval(() => {
             const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            setCallDuration(elapsed);
+            dispatch({ type: 'SET_CALL_DURATION', payload: elapsed });
           }, 1000);
           
           // Start monitoring connection quality
@@ -644,7 +820,7 @@ function RealtimeConnect() {
           // Try ICE restart first before full reconnection
           performIceRestart();
         } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-          setCallActive(false);
+          dispatch({ type: 'SET_CALL_ACTIVE', payload: false });
           if (durationIntervalRef.current) {
             clearInterval(durationIntervalRef.current);
           }
@@ -660,7 +836,7 @@ function RealtimeConnect() {
         appendLog(`ICE connection state changed: ${pc.iceConnectionState}`);
         // Update connection state based on ICE state as well
         if (pc.iceConnectionState === 'checking') {
-          setConnectionState('checking');
+          dispatch({ type: 'SET_CONNECTION_STATE', payload: 'checking' });
         }
       };
       
@@ -750,91 +926,60 @@ function RealtimeConnect() {
       appendLog("Local SDP offer created.");
       await pc.setLocalDescription(offer);
 
-      // 6) Wait for ICE gathering to complete or timeout
-      appendLog("Waiting for ICE gathering to complete...");
-      await Promise.race([
-        new Promise(resolve => {
-          if (pc.iceGatheringState === "complete") {
-            resolve();
-          } else {
-            const checkState = () => {
-              if (pc.iceGatheringState === "complete") {
-                pc.removeEventListener("icegatheringstatechange", checkState);
-                resolve();
-              }
-            };
-            pc.addEventListener("icegatheringstatechange", checkState);
-          }
-        }),
-        // Add a timeout to prevent waiting indefinitely
-        new Promise(resolve => {
-          setTimeout(() => {
-            // Continue anyway after timeout, just log it
-            appendLog("ICE gathering timed out, continuing with available candidates");
-            resolve();
-          }, 5000); // 5 second timeout
-        })
-      ]);
-      appendLog("ICE gathering complete or timed out.");
-
-      // 7) Send the SDP offer to the OpenAI Realtime API.
-      appendLog("Sending SDP offer to OpenAI Realtime API...");
-      const baseUrl = "https://api.openai.com/v1/realtime";
-      const model = "gpt-4o-mini-realtime-preview";
+      // TRICKLE ICE IMPLEMENTATION:
+      // Instead of waiting for ICE gathering to complete, we'll send the offer immediately
+      // and then update with candidates as they arrive
       
-      // Add retry logic for API call
-      let retries = 0;
-      const maxRetries = 3;
-      let sdpResp;
-      
-      while (retries < maxRetries) {
+      // Create a function to send the initial offer with any candidates we already have
+      const sendInitialOffer = async () => {
+        appendLog("Sending initial SDP offer to OpenAI Realtime API...");
+        
+        // Get the current SDP (which might have some candidates already)
+        const currentSdp = pc.localDescription.sdp;
+        
         try {
-          sdpResp = await fetch(`${baseUrl}?model=${model}`, {
+          const sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview`, {
             method: "POST",
             headers: {
               Authorization: `Bearer ${ephemeralKey}`,
               "Content-Type": "application/sdp",
             },
-            body: offer.sdp,
+            body: currentSdp,
           });
           
-          if (sdpResp.ok) break;
-          
-          // If we get a 429 or 500+ error, retry
-          if (sdpResp.status === 429 || sdpResp.status >= 500) {
-            retries++;
-            const backoff = Math.pow(2, retries) * 1000; // Exponential backoff
-            appendLog(`API call failed with status ${sdpResp.status}. Retrying in ${backoff/1000}s...`);
-            await new Promise(r => setTimeout(r, backoff));
-          } else {
-            // For other errors, don't retry
+          if (!sdpResp.ok) {
             throw new Error(`API returned status ${sdpResp.status}`);
           }
-        } catch (fetchError) {
-          retries++;
-          if (retries >= maxRetries) throw fetchError;
           
-          const backoff = Math.pow(2, retries) * 1000;
-          appendLog(`API call failed: ${fetchError.message}. Retrying in ${backoff/1000}s...`);
-          await new Promise(r => setTimeout(r, backoff));
+          const answerSDP = await sdpResp.text();
+          appendLog("Received SDP answer from OpenAI.");
+          
+          // Set the remote description
+          await pc.setRemoteDescription({ type: "answer", sdp: answerSDP });
+          appendLog("Remote SDP set.");
+          appendLog("Setup complete - waiting for audio...");
+        } catch (error) {
+          appendLog(`Error sending initial offer: ${error.message}`);
+          throw error;
         }
-      }
+      };
       
-      if (!sdpResp.ok) throw new Error("OpenAI Realtime handshake failed after retries");
-      
-      const answerSDP = await sdpResp.text();
-      appendLog("Received SDP answer from OpenAI.");
+      // Send the initial offer after a short delay to allow some candidates to gather
+      // This is a compromise between waiting for all candidates and sending immediately
+      setTimeout(() => {
+        sendInitialOffer().catch(err => {
+          appendLog(`Failed to send initial offer: ${err.message}`);
+          showNotification(`Connection error: ${err.message}`, "error");
+          dispatch({ type: 'SET_CONNECTING', payload: false });
+        });
+      }, 500); // 500ms delay to collect some initial candidates
 
-      // 8) Set the remote SDP.
-      await pc.setRemoteDescription({ type: "answer", sdp: answerSDP });
-      appendLog("Remote SDP set.");
-      appendLog("Setup complete - waiting for audio...");
     } catch (err) {
       appendLog(`Connection error: ${err.message}`);
       console.error("Connection error:", err);
       // Replace alert with notification
       showNotification(`Connection error: ${err.message}`, "error");
-      setIsConnecting(false);
+      dispatch({ type: 'SET_CONNECTING', payload: false });
       
       if (reconnectAttemptsRef.current === 0) {
         attemptReconnect();
@@ -903,14 +1048,14 @@ function RealtimeConnect() {
     }
     
     // Reset all state
-    setConnectionState('closed');
-    setCallActive(false);
-    setIsConnecting(false);
-    setNetworkQuality('unknown');
-    setIsMuted(false);
+    dispatch({ type: 'SET_CONNECTION_STATE', payload: 'closed' });
+    dispatch({ type: 'SET_CALL_ACTIVE', payload: false });
+    dispatch({ type: 'SET_CONNECTING', payload: false });
+    dispatch({ type: 'SET_NETWORK_QUALITY', payload: 'unknown' });
+    dispatch({ type: 'SET_MUTED', payload: false });
     
     // Calculate final duration
-    const finalDuration = callStartTime ? Math.floor((Date.now() - callStartTime) / 1000) : 0;
+    const finalDuration = state.callStartTime ? Math.floor((Date.now() - state.callStartTime) / 1000) : 0;
     const minutes = Math.floor(finalDuration / 60);
     const seconds = finalDuration % 60;
     const formattedDuration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
@@ -925,92 +1070,20 @@ function RealtimeConnect() {
     });
   };
 
+  // Update handleMuteToggle to use dispatch
   const handleMuteToggle = () => {
     if (!localStreamRef.current) return;
     
     // Toggle mute state
-    setIsMuted(!isMuted);
+    const newMuteState = !state.isMuted;
+    dispatch({ type: 'SET_MUTED', payload: newMuteState });
     
     // Actually mute/unmute the audio tracks
     localStreamRef.current.getAudioTracks().forEach(track => {
-      track.enabled = isMuted; // If currently muted, enable tracks
+      track.enabled = newMuteState; // If currently muted, enable tracks
     });
     
-    appendLog(`Microphone ${isMuted ? 'unmuted' : 'muted'}`);
-  };
-
-  // Function to handle ICE restart
-  const performIceRestart = async () => {
-    if (!peerConnectionRef.current || iceRestartAttemptsRef.current >= maxIceRestarts) {
-      appendLog("Cannot perform ICE restart - falling back to full reconnection");
-      attemptReconnect();
-      return;
-    }
-
-    try {
-      appendLog(`Attempting ICE restart (attempt ${iceRestartAttemptsRef.current + 1}/${maxIceRestarts})`);
-      iceRestartAttemptsRef.current++;
-
-      // Create new offer with iceRestart: true
-      const offer = await peerConnectionRef.current.createOffer({ 
-        iceRestart: true,
-        offerToReceiveAudio: true,
-        voiceActivityDetection: true
-      });
-      
-      await peerConnectionRef.current.setLocalDescription(offer);
-      
-      // Wait for ICE gathering with timeout
-      await Promise.race([
-        new Promise(resolve => {
-          const checkState = () => {
-            if (peerConnectionRef.current.iceGatheringState === "complete") {
-              peerConnectionRef.current.removeEventListener("icegatheringstatechange", checkState);
-              resolve();
-            }
-          };
-          peerConnectionRef.current.addEventListener("icegatheringstatechange", checkState);
-        }),
-        new Promise(resolve => setTimeout(resolve, 5000))
-      ]);
-
-      // Get new ephemeral token and send offer to OpenAI
-      const jwtToken = localStorage.getItem("token");
-      const rtResp = await fetch(`https://demobackend-p2e1.onrender.com/realtime/token?session_id=${sessionId}`, {
-        headers: { Authorization: `Bearer ${jwtToken}` },
-      });
-      const rtData = await rtResp.json();
-      const ephemeralKey = rtData.client_secret.value;
-
-      const sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${ephemeralKey}`,
-          "Content-Type": "application/sdp",
-        },
-        body: offer.sdp,
-      });
-
-      if (!sdpResp.ok) throw new Error("Failed to get SDP answer during ICE restart");
-
-      const answerSDP = await sdpResp.text();
-      await peerConnectionRef.current.setRemoteDescription({ type: "answer", sdp: answerSDP });
-      
-      appendLog("ICE restart completed successfully");
-      iceRestartAttemptsRef.current = 0; // Reset counter on success
-    } catch (err) {
-      appendLog(`ICE restart failed: ${err.message}`);
-      // If ICE restart fails, try again with exponential backoff or fall back to full reconnect
-      const backoffTime = Math.min(1000 * Math.pow(2, iceRestartAttemptsRef.current), 5000);
-      
-      if (iceRestartAttemptsRef.current < maxIceRestarts) {
-        appendLog(`Retrying ICE restart in ${backoffTime/1000}s...`);
-        iceRestartTimeoutRef.current = setTimeout(performIceRestart, backoffTime);
-      } else {
-        appendLog("Maximum ICE restarts attempted, falling back to full reconnection");
-        attemptReconnect();
-      }
-    }
+    appendLog(`Microphone ${newMuteState ? 'unmuted' : 'muted'}`);
   };
 
   // Add helper function for audio conversion
@@ -1026,15 +1099,18 @@ function RealtimeConnect() {
 
   return (
     <div className={styles.container}>
-      {/* Add notification component */}
-      {notification.show && (
-        <div className={`${styles.notification} ${styles[notification.type]}`}>
+      {/* Update notification component to use state from reducer */}
+      {state.notification.show && (
+        <div className={`${styles.notification} ${styles[state.notification.type]}`}>
           <div className={styles.notificationContent}>
-            {notification.message}
+            {state.notification.message}
           </div>
           <button 
             className={styles.notificationClose}
-            onClick={() => setNotification(prev => ({ ...prev, show: false }))}
+            onClick={() => dispatch({ 
+              type: 'SET_NOTIFICATION', 
+              payload: { ...state.notification, show: false }
+            })}
           >
             ×
           </button>
@@ -1053,10 +1129,10 @@ function RealtimeConnect() {
       <div className={styles.connectionIndicator}>
         <div 
           className={styles.statusDot}
-          style={{ backgroundColor: getConnectionStateColor(connectionState) }}
+          style={{ backgroundColor: getConnectionStateColor(state.connectionState) }}
         ></div>
         <span className={styles.statusText}>
-          {getConnectionStatusText(connectionState)}
+          {getConnectionStatusText(state.connectionState)}
         </span>
       </div>
       
@@ -1067,21 +1143,21 @@ function RealtimeConnect() {
         <div className={styles.callHost}>{callInfo.host}</div>
       </div>
       
-      {/* Visualizer area */}
+      {/* Visualizer area - wrap with React.lazy and Suspense in a real implementation */}
       <div className={styles.visualizerContainer}>
         <AudioVisualizer 
           mediaStream={remoteMediaStreamRef.current} 
-          isLoading={isConnecting}
+          isLoading={state.isConnecting}
         />
       </div>
       
       {/* Call controls */}
       <div className={styles.controlsContainer}>
         <button 
-          className={`${styles.controlButton} ${styles.micButton} ${isMuted ? styles.muted : ''}`}
+          className={`${styles.controlButton} ${styles.micButton} ${state.isMuted ? styles.muted : ''}`}
           onClick={handleMuteToggle}
         >
-          <img src="/assets/mute.svg" alt="Mute" />
+          <img src={state.isMuted ? "/assets/mute-active.svg" : "/assets/mute.svg"} alt="Mute" />
         </button>
         <button className={`${styles.controlButton} ${styles.optionsButton}`}>
           <img src="/assets/dots.svg" alt="Options" />
@@ -1094,7 +1170,7 @@ function RealtimeConnect() {
         </button>
       </div>
       
-      {/* Debug log - modified condition and added test content */}
+      {/* Debug log */}
       {process.env.NODE_ENV === 'development' && 
        (process.env.REACT_APP_SHOW_DEBUG_LOGS === 'true' || process.env.REACT_APP_SHOW_DEBUG_LOGS === '"true"') && (
         <div className={styles.debugLogContainer}>
@@ -1105,14 +1181,14 @@ function RealtimeConnect() {
         </div>
       )}
       
-      {/* Updated transcript panel */}
+      {/* Updated transcript panel to use state from reducer */}
       <div className={styles.transcriptPanel}>
         <div className={styles.transcriptHeader}>
           <span>Transcript:</span>
           <img src="/assets/chat.svg" alt="Transcript" width="20" height="20" />
         </div>
         <div className={styles.transcriptContent}>
-          {transcripts.map((transcript, index) => (
+          {state.transcripts.map((transcript, index) => (
             <div key={index} className={styles.transcriptEntry}>
               <span className={styles.timestamp}>
                 {new Date(transcript.timestamp).toLocaleTimeString([], { 
@@ -1131,7 +1207,7 @@ function RealtimeConnect() {
         </div>
       </div>
 
-      {/* Add footer */}
+      {/* Footer */}
       <footer className={styles.footer}>
         <a href="mailto:maxricodecastro@gmail.com">Need help?</a>
         <a href="https://www.use-reach.com" target="_blank" rel="noopener noreferrer">About Reach</a>

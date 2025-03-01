@@ -76,9 +76,13 @@
   transition: all 0.2s ease;
 }
 
-
 .micButton {
   background-color: #f2f2f2;
+}
+
+.micButton.muted {
+  background-color: #ef4444;
+  color: white;
 }
 
 .optionsButton {
@@ -91,6 +95,10 @@
 
 .micButton:hover, .optionsButton:hover {
   background-color: #e0e0e0;
+}
+
+.micButton.muted:hover {
+  background-color: #dc2626;
 }
 
 .endCallButton:hover {
