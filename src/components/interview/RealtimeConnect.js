@@ -1,5 +1,5 @@
 // interview-frontend/src/components/RealtimeConnect.js
-import React, { useEffect, useState, useRef, useReducer, useCallback } from "react";
+import React, { useEffect, useState, useRef, useReducer, useCallback, useMemo } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import AudioVisualizer from "./AudioVisualizer";
@@ -102,6 +102,9 @@ function RealtimeConnect() {
   const HEARTBEAT_INTERVAL = 10000; // 10 seconds
   const HEARTBEAT_TIMEOUT = 15000;  // 15 seconds
   const AUDIO_SILENCE_THRESHOLD = 15000; // 15 seconds of silence before heartbeat
+
+  // Add a ref to track if we've already made the initial connection attempt
+  const hasInitializedRef = useRef(false);
 
   // Set call info from navigation state
   useEffect(() => {
@@ -300,7 +303,10 @@ function RealtimeConnect() {
 
   useEffect(() => {
     // Auto-connect when component mounts if we have a sessionId
-    if (sessionId) {
+    if (sessionId && !hasInitializedRef.current) {
+      // Set the flag to prevent duplicate connection attempts
+      hasInitializedRef.current = true;
+      
       // Reset connection state before attempting to connect
       reconnectAttemptsRef.current = 0;
       
@@ -441,25 +447,29 @@ function RealtimeConnect() {
     }, duration);
   };
 
-  // Create an axios instance with default config
-  const api = axios.create({
-    baseURL: 'https://demobackend-p2e1.onrender.com',
-    timeout: 10000, // 10 seconds timeout
-    headers: {
-      'Content-Type': 'application/json'
-    }
-  });
+  // Create an axios instance with default config and memoize it
+  const api = useMemo(() => {
+    const instance = axios.create({
+      baseURL: 'https://demobackend-p2e1.onrender.com',
+      timeout: 10000, // 10 seconds timeout
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
 
-  // Add request interceptor to include auth token
-  api.interceptors.request.use(config => {
-    const token = localStorage.getItem("token");
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  }, error => {
-    return Promise.reject(error);
-  });
+    // Add request interceptor to include auth token
+    instance.interceptors.request.use(config => {
+      const token = localStorage.getItem("token");
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
+    }, error => {
+      return Promise.reject(error);
+    });
+    
+    return instance;
+  }, []);
 
   // Helper function for OpenAI API requests
   const openaiApi = async (url, method, data, headers = {}) => {
@@ -606,6 +616,12 @@ function RealtimeConnect() {
 
   // Update handleConnect to use axios
   async function handleConnect() {
+    // Prevent duplicate connection attempts
+    if (state.isConnecting) {
+      appendLog("Connection already in progress, ignoring duplicate request");
+      return;
+    }
+    
     // Reset connection state if reconnecting
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
@@ -1004,6 +1020,7 @@ function RealtimeConnect() {
     }
   }
 
+  // Function to handle ending the call
   const handleEndCall = () => {
     appendLog("Ending call - cleaning up resources...");
     
@@ -1052,7 +1069,7 @@ function RealtimeConnect() {
       audioRef.current.load(); // Reset the audio element
     }
     
-    // Clean up media streams
+    // Clean up media streams - ensure microphone is released
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
         track.stop();
@@ -1101,7 +1118,7 @@ function RealtimeConnect() {
     }
   };
 
-  // Update handleMuteToggle to use dispatch
+  // Update handleMuteToggle to properly handle track enabling/disabling
   const handleMuteToggle = () => {
     if (!localStreamRef.current) return;
     
@@ -1111,10 +1128,10 @@ function RealtimeConnect() {
     
     // Actually mute/unmute the audio tracks
     localStreamRef.current.getAudioTracks().forEach(track => {
-      track.enabled = newMuteState; // If currently muted, enable tracks
+      track.enabled = !newMuteState; // If muted is true, disable tracks
     });
     
-    appendLog(`Microphone ${newMuteState ? 'unmuted' : 'muted'}`);
+    appendLog(`Microphone ${newMuteState ? 'muted' : 'unmuted'}`);
   };
 
   // Add a function to handle new transcripts from the Transcription component
