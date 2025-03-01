@@ -1,6 +1,7 @@
 // interview-frontend/src/components/RealtimeConnect.js
 import React, { useEffect, useState, useRef, useReducer } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
+import axios from "axios";
 import AudioVisualizer from "./AudioVisualizer";
 import styles from "./realtimeconnect.module.css";
 
@@ -393,6 +394,56 @@ function RealtimeConnect() {
     }, duration);
   };
 
+  // Create an axios instance with default config
+  const api = axios.create({
+    baseURL: 'https://demobackend-p2e1.onrender.com',
+    timeout: 10000, // 10 seconds timeout
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  });
+
+  // Add request interceptor to include auth token
+  api.interceptors.request.use(config => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  }, error => {
+    return Promise.reject(error);
+  });
+
+  // Helper function for OpenAI API requests
+  const openaiApi = async (url, method, data, headers = {}) => {
+    try {
+      const response = await axios({
+        url: `https://api.openai.com/v1${url}`,
+        method,
+        data,
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers
+        },
+        timeout: 15000 // 15 seconds timeout for OpenAI
+      });
+      return response.data;
+    } catch (error) {
+      // Enhanced error handling
+      if (error.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        throw new Error(`OpenAI API error: ${error.response.status} - ${error.response.data?.error?.message || error.response.statusText}`);
+      } else if (error.request) {
+        // The request was made but no response was received
+        throw new Error(`OpenAI API request timeout: ${error.message}`);
+      } else {
+        // Something happened in setting up the request
+        throw new Error(`OpenAI API error: ${error.message}`);
+      }
+    }
+  };
+
   // Add the AI transcription initialization function
   const initializeAiTranscription = async () => {
     try {
@@ -587,7 +638,7 @@ function RealtimeConnect() {
     }
   };
 
-  // Improved performIceRestart function with better error handling and backoff
+  // Update performIceRestart to use axios
   const performIceRestart = async () => {
     if (!peerConnectionRef.current || iceRestartAttemptsRef.current >= maxIceRestarts) {
       appendLog("Cannot perform ICE restart - falling back to full reconnection");
@@ -635,67 +686,55 @@ function RealtimeConnect() {
         }, 5000))
       ]);
 
-      // Get new ephemeral token and send offer to OpenAI
-      const jwtToken = localStorage.getItem("token");
-      const rtResp = await fetch(`https://demobackend-p2e1.onrender.com/realtime/token?session_id=${sessionId}`, {
-        headers: { Authorization: `Bearer ${jwtToken}` },
-      });
-      
-      if (!rtResp.ok) {
-        throw new Error(`Failed to get token: ${await rtResp.text()}`);
-      }
-      
-      const rtData = await rtResp.json();
-      const ephemeralKey = rtData.client_secret.value;
+      // Get new ephemeral token using axios
+      try {
+        const rtResp = await api.get(`/realtime/token?session_id=${sessionId}`);
+        const ephemeralKey = rtResp.data.client_secret.value;
 
-      // Add retry logic for API call
-      let retries = 0;
-      const maxRetries = 3;
-      let sdpResp;
-      
-      while (retries < maxRetries) {
-        try {
-          sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${ephemeralKey}`,
-              "Content-Type": "application/sdp",
-            },
-            body: offer.sdp,
-          });
-          
-          if (sdpResp.ok) break;
-          
-          // If we get a 429 or 500+ error, retry
-          if (sdpResp.status === 429 || sdpResp.status >= 500) {
-            retries++;
-            const backoff = Math.pow(2, retries) * 1000; // Exponential backoff
-            appendLog(`API call failed with status ${sdpResp.status}. Retrying in ${backoff/1000}s...`);
-            await new Promise(r => setTimeout(r, backoff));
-          } else {
-            // For other errors, don't retry
-            throw new Error(`API returned status ${sdpResp.status}`);
+        // Use axios for OpenAI API call with retry logic
+        let retries = 0;
+        const maxRetries = 3;
+        let answerSDP;
+        
+        while (retries < maxRetries) {
+          try {
+            // Use axios for the OpenAI API call
+            const response = await axios({
+              url: 'https://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview',
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${ephemeralKey}`,
+                'Content-Type': 'application/sdp'
+              },
+              data: offer.sdp,
+              timeout: 10000
+            });
+            
+            answerSDP = response.data;
+            break;
+          } catch (error) {
+            if (error.response && (error.response.status === 429 || error.response.status >= 500) && retries < maxRetries - 1) {
+              retries++;
+              const backoff = Math.pow(2, retries) * 1000;
+              appendLog(`API call failed with status ${error.response.status}. Retrying in ${backoff/1000}s...`);
+              await new Promise(r => setTimeout(r, backoff));
+            } else {
+              throw error;
+            }
           }
-        } catch (fetchError) {
-          retries++;
-          if (retries >= maxRetries) throw fetchError;
-          
-          const backoff = Math.pow(2, retries) * 1000;
-          appendLog(`API call failed: ${fetchError.message}. Retrying in ${backoff/1000}s...`);
-          await new Promise(r => setTimeout(r, backoff));
         }
+
+        await peerConnectionRef.current.setRemoteDescription({ type: "answer", sdp: answerSDP });
+        
+        appendLog("ICE restart completed successfully");
+        iceRestartAttemptsRef.current = 0; // Reset counter on success
+        
+        // Update connection state
+        dispatch({ type: 'SET_CONNECTION_STATE', payload: 'checking' });
+        
+      } catch (error) {
+        throw new Error(`Failed to get token or set remote description: ${error.message}`);
       }
-
-      if (!sdpResp.ok) throw new Error("OpenAI Realtime handshake failed after retries");
-
-      const answerSDP = await sdpResp.text();
-      await peerConnectionRef.current.setRemoteDescription({ type: "answer", sdp: answerSDP });
-      
-      appendLog("ICE restart completed successfully");
-      iceRestartAttemptsRef.current = 0; // Reset counter on success
-      
-      // Update connection state
-      dispatch({ type: 'SET_CONNECTION_STATE', payload: 'checking' });
       
     } catch (err) {
       appendLog(`ICE restart failed: ${err.message}`);
@@ -712,7 +751,7 @@ function RealtimeConnect() {
     }
   };
 
-  // Improved handleConnect function with better ICE configuration
+  // Update handleConnect to use axios
   async function handleConnect() {
     // Reset connection state if reconnecting
     if (peerConnectionRef.current) {
@@ -734,23 +773,16 @@ function RealtimeConnect() {
     }
 
     try {
-      // Get Twilio TURN credentials first
+      // Get Twilio TURN credentials using axios
       appendLog("Fetching TURN credentials...");
-      const turnResp = await fetch('https://demobackend-p2e1.onrender.com/webrtc/turn-credentials', {
-        headers: { Authorization: `Bearer ${jwtToken}` }
-      });
-      if (!turnResp.ok) throw new Error("Failed to get TURN credentials");
-      const turnData = await turnResp.json();
+      const turnResp = await api.get('/webrtc/turn-credentials');
+      const turnData = turnResp.data;
       appendLog(`Got TURN credentials (TTL: ${turnData.ttl}s)`);
 
-      // 1) Get ephemeral token from your backend.
+      // Get ephemeral token using axios
       appendLog("Fetching ephemeral token...");
-      const rtResp = await fetch(`https://demobackend-p2e1.onrender.com/realtime/token?session_id=${sessionId}`, {
-        headers: { Authorization: `Bearer ${jwtToken}` },
-      });
-      if (!rtResp.ok) throw new Error("Failed to get ephemeral token");
-      const rtData = await rtResp.json();
-      const ephemeralKey = rtData.client_secret.value;
+      const rtResp = await api.get(`/realtime/token?session_id=${sessionId}`);
+      const ephemeralKey = rtResp.data.client_secret.value;
       appendLog("Got ephemeral key: " + ephemeralKey.substring(0, 15) + "...");
 
       // 2) Create RTCPeerConnection with improved configuration
@@ -785,7 +817,7 @@ function RealtimeConnect() {
           }
         ],
         iceCandidatePoolSize: 10,
-        iceTransportPolicy: 'all', // Could consider 'relay' if NAT traversal is problematic
+        iceTransportPolicy: 'all',
         rtcpMuxPolicy: 'require',
         bundlePolicy: 'max-bundle',
         sdpSemantics: 'unified-plan'
@@ -938,20 +970,19 @@ function RealtimeConnect() {
         const currentSdp = pc.localDescription.sdp;
         
         try {
-          const sdpResp = await fetch(`https://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview`, {
-            method: "POST",
+          // Use axios for the OpenAI API call
+          const response = await axios({
+            url: 'https://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview',
+            method: 'POST',
             headers: {
-              Authorization: `Bearer ${ephemeralKey}`,
-              "Content-Type": "application/sdp",
+              'Authorization': `Bearer ${ephemeralKey}`,
+              'Content-Type': 'application/sdp'
             },
-            body: currentSdp,
+            data: currentSdp,
+            timeout: 10000
           });
           
-          if (!sdpResp.ok) {
-            throw new Error(`API returned status ${sdpResp.status}`);
-          }
-          
-          const answerSDP = await sdpResp.text();
+          const answerSDP = response.data;
           appendLog("Received SDP answer from OpenAI.");
           
           // Set the remote description
@@ -959,8 +990,22 @@ function RealtimeConnect() {
           appendLog("Remote SDP set.");
           appendLog("Setup complete - waiting for audio...");
         } catch (error) {
-          appendLog(`Error sending initial offer: ${error.message}`);
-          throw error;
+          let errorMessage = "Unknown error";
+          
+          if (error.response) {
+            // The request was made and the server responded with a status code
+            // that falls out of the range of 2xx
+            errorMessage = `API returned status ${error.response.status}: ${error.response.data?.error?.message || error.response.statusText}`;
+          } else if (error.request) {
+            // The request was made but no response was received
+            errorMessage = `Request timeout: ${error.message}`;
+          } else {
+            // Something happened in setting up the request
+            errorMessage = error.message;
+          }
+          
+          appendLog(`Error sending initial offer: ${errorMessage}`);
+          throw new Error(errorMessage);
         }
       };
       
@@ -1157,7 +1202,7 @@ function RealtimeConnect() {
           className={`${styles.controlButton} ${styles.micButton} ${state.isMuted ? styles.muted : ''}`}
           onClick={handleMuteToggle}
         >
-          <img src={state.isMuted ? "/assets/mute-active.svg" : "/assets/mute.svg"} alt="Mute" />
+          <img src="/assets/mute.svg" alt="Mute" />
         </button>
         <button className={`${styles.controlButton} ${styles.optionsButton}`}>
           <img src="/assets/dots.svg" alt="Options" />
