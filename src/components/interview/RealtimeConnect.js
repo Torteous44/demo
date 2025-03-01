@@ -4,6 +4,7 @@ import { useParams, useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import AudioVisualizer from "./AudioVisualizer";
 import styles from "./realtimeconnect.module.css";
+import Transcription from './Transcription';
 
 function connectionReducer(state, action) {
   switch (action.type) {
@@ -78,25 +79,6 @@ function RealtimeConnect() {
   
   // Add duration interval ref
   const durationIntervalRef = useRef(null);
-
-  // Add new state and refs for transcription
-  const assemblyWsRef = useRef(null);
-
-  // Add new ref for AI WebSocket and audio context
-  const aiAssemblyWsRef = useRef(null);
-  const aiAudioContextRef = useRef(null);
-  const aiProcessorRef = useRef(null);
-
-  // Add new state for tracking AI transcription
-  const [isAiTranscribing, setIsAiTranscribing] = useState(false);
-
-  // Add ref for user WebSocket
-  const userAssemblyWsRef = useRef(null);
-  const userAudioContextRef = useRef(null);
-  const userProcessorRef = useRef(null);
-
-  // Add state for user transcription
-  const [isUserTranscribing, setIsUserTranscribing] = useState(false);
 
   // Add a new ref to track the last transcript
   const lastTranscriptRef = useRef({
@@ -232,7 +214,7 @@ function RealtimeConnect() {
       }, 100);
     }
     
-    // Cleanup function
+    // Cleanup function - IMPORTANT: Don't navigate in the cleanup function
     return () => {
       appendLog("Component unmounting - cleaning up resources...");
       
@@ -298,48 +280,14 @@ function RealtimeConnect() {
         remoteMediaStreamRef.current = new MediaStream();
       }
       
-      // Clean up transcription
-      if (assemblyWsRef.current) {
-        assemblyWsRef.current.close();
-        assemblyWsRef.current = null;
-      }
+      // Reset all state
+      dispatch({ type: 'SET_CONNECTION_STATE', payload: 'closed' });
+      dispatch({ type: 'SET_CALL_ACTIVE', payload: false });
+      dispatch({ type: 'SET_CONNECTING', payload: false });
+      dispatch({ type: 'SET_NETWORK_QUALITY', payload: 'unknown' });
+      dispatch({ type: 'SET_MUTED', payload: false });
       
-      // Clean up AI transcription resources
-      if (aiAssemblyWsRef.current) {
-        aiAssemblyWsRef.current.close();
-        aiAssemblyWsRef.current = null;
-      }
-      
-      if (aiProcessorRef.current) {
-        aiProcessorRef.current.disconnect();
-        aiProcessorRef.current = null;
-      }
-      
-      if (aiAudioContextRef.current) {
-        aiAudioContextRef.current.close();
-        aiAudioContextRef.current = null;
-      }
-      
-      // Clean up user transcription resources
-      if (userAssemblyWsRef.current) {
-        userAssemblyWsRef.current.close();
-        userAssemblyWsRef.current = null;
-      }
-      
-      if (userProcessorRef.current) {
-        userProcessorRef.current.disconnect();
-        userProcessorRef.current = null;
-      }
-      
-      if (userAudioContextRef.current) {
-        userAudioContextRef.current.close();
-        userAudioContextRef.current = null;
-      }
-      
-      setIsAiTranscribing(false);
-      setIsUserTranscribing(false);
-      
-      appendLog("Cleanup complete");
+      appendLog("Call ended - all resources cleaned up");
     };
   }, [sessionId]);
 
@@ -441,200 +389,6 @@ function RealtimeConnect() {
         // Something happened in setting up the request
         throw new Error(`OpenAI API error: ${error.message}`);
       }
-    }
-  };
-
-  // Add the AI transcription initialization function
-  const initializeAiTranscription = async () => {
-    try {
-      appendLog("Initializing AI transcription...");
-      
-      // Get temporary token
-      const jwtToken = localStorage.getItem("token");
-      const response = await fetch('https://demobackend-p2e1.onrender.com/transcription/assembly-token', {
-        headers: { 
-          Authorization: `Bearer ${jwtToken}`,
-          Accept: 'application/json'
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to get AI token: ${await response.text()}`);
-      }
-      
-      const { token: aiTempToken } = await response.json();
-      const SAMPLE_RATE = 16000;
-      const wsUrl = `wss://api.assemblyai.com/v2/realtime/ws?sample_rate=${SAMPLE_RATE}&token=${encodeURIComponent(aiTempToken)}`;
-      
-      const aiWs = new WebSocket(wsUrl);
-      aiAssemblyWsRef.current = aiWs;
-
-      aiWs.onopen = () => {
-        appendLog("AI WebSocket connected");
-        setIsAiTranscribing(true);
-        
-        // Set up audio processing once WebSocket is open
-        if (remoteMediaStreamRef.current) {
-          aiAudioContextRef.current = new AudioContext({ sampleRate: SAMPLE_RATE });
-          const source = aiAudioContextRef.current.createMediaStreamSource(remoteMediaStreamRef.current);
-          const processor = aiAudioContextRef.current.createScriptProcessor(2048, 1, 1);
-          aiProcessorRef.current = processor;
-          
-          processor.onaudioprocess = (e) => {
-            if (aiWs.readyState === WebSocket.OPEN) {
-              const inputData = e.inputBuffer.getChannelData(0);
-              const int16Data = convertFloat32ToInt16(inputData);
-              aiWs.send(int16Data);
-            }
-          };
-          
-          source.connect(processor);
-          processor.connect(aiAudioContextRef.current.destination);
-          appendLog("AI audio processing pipeline established");
-        }
-      };
-
-      aiWs.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          if (message.message_type === 'FinalTranscript') {
-            // Check if this is a duplicate of the last transcript
-            if (lastTranscriptRef.current.text === message.text && 
-                lastTranscriptRef.current.speaker === 'AI') {
-              return; // Skip duplicate transcript
-            }
-            
-            // Update last transcript
-            lastTranscriptRef.current = {
-              text: message.text,
-              speaker: 'AI',
-              timestamp: new Date().toISOString()
-            };
-
-            dispatch({
-              type: 'ADD_TRANSCRIPT',
-              payload: {
-                text: message.text,
-                speaker: 'AI',
-                timestamp: new Date().toISOString()
-              }
-            });
-          }
-        } catch (error) {
-          appendLog(`Error processing AI message: ${error.message}`);
-        }
-      };
-
-      aiWs.onerror = (error) => {
-        appendLog(`AI WebSocket error: ${error.message || 'Unknown error'}`);
-        showNotification("AI transcription error occurred", "error");
-      };
-
-      aiWs.onclose = () => {
-        setIsAiTranscribing(false);
-        appendLog("AI WebSocket closed");
-      };
-
-    } catch (error) {
-      appendLog(`Failed to initialize AI transcription: ${error.message}`);
-      showNotification(`AI transcription unavailable: ${error.message}`, "error");
-    }
-  };
-
-  // Add user transcription initialization function
-  const initializeUserTranscription = async () => {
-    try {
-      appendLog("Initializing user transcription...");
-      
-      // Get temporary token
-      const jwtToken = localStorage.getItem("token");
-      const response = await fetch('https://demobackend-p2e1.onrender.com/transcription/assembly-token', {
-        headers: { 
-          Authorization: `Bearer ${jwtToken}`,
-          Accept: 'application/json'
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to get user token: ${await response.text()}`);
-      }
-      
-      const { token: userTempToken } = await response.json();
-      const SAMPLE_RATE = 16000;
-      const wsUrl = `wss://api.assemblyai.com/v2/realtime/ws?sample_rate=${SAMPLE_RATE}&token=${encodeURIComponent(userTempToken)}`;
-      
-      const userWs = new WebSocket(wsUrl);
-      userAssemblyWsRef.current = userWs;
-
-      userWs.onopen = () => {
-        appendLog("User WebSocket connected");
-        setIsUserTranscribing(true);
-        
-        // Set up audio processing once WebSocket is open
-        if (localStreamRef.current) {
-          userAudioContextRef.current = new AudioContext({ sampleRate: SAMPLE_RATE });
-          const source = userAudioContextRef.current.createMediaStreamSource(localStreamRef.current);
-          const processor = userAudioContextRef.current.createScriptProcessor(2048, 1, 1);
-          userProcessorRef.current = processor;
-          
-          processor.onaudioprocess = (e) => {
-            if (userWs.readyState === WebSocket.OPEN) {
-              const inputData = e.inputBuffer.getChannelData(0);
-              const int16Data = convertFloat32ToInt16(inputData);
-              userWs.send(int16Data);
-            }
-          };
-          
-          source.connect(processor);
-          processor.connect(userAudioContextRef.current.destination);
-          appendLog("User audio processing pipeline established");
-        }
-      };
-
-      userWs.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          if (message.message_type === 'FinalTranscript') {
-            // Check if this is a duplicate of the last transcript
-            if (lastTranscriptRef.current.text === message.text && 
-                lastTranscriptRef.current.speaker === 'User') {
-              return; // Skip duplicate transcript
-            }
-            
-            // Update last transcript
-            lastTranscriptRef.current = {
-              text: message.text,
-              speaker: 'User',
-              timestamp: new Date().toISOString()
-            };
-
-            dispatch({
-              type: 'ADD_TRANSCRIPT',
-              payload: {
-                text: message.text,
-                speaker: 'User',
-                timestamp: new Date().toISOString()
-              }
-            });
-          }
-        } catch (error) {
-          appendLog(`Error processing user message: ${error.message}`);
-        }
-      };
-
-      userWs.onerror = (error) => {
-        appendLog(`User WebSocket error: ${error.message || 'Unknown error'}`);
-        showNotification("User transcription error occurred", "error");
-      };
-
-      userWs.onclose = () => {
-        setIsUserTranscribing(false);
-        appendLog("User WebSocket closed");
-      };
-
-    } catch (error) {
-      appendLog(`Failed to initialize user transcription: ${error.message}`);
-      showNotification(`User transcription unavailable: ${error.message}`, "error");
     }
   };
 
@@ -917,9 +671,6 @@ function RealtimeConnect() {
           pc.addTrack(track, localStream);
         });
 
-        // Initialize user transcription once we have the local stream
-        initializeUserTranscription();
-
       } catch (mediaError) {
         appendLog(`Media error: ${mediaError.message}`);
         throw new Error(`Could not access microphone: ${mediaError.message}`);
@@ -940,9 +691,6 @@ function RealtimeConnect() {
                 appendLog(`Audio play error: ${error.message}`);
               });
             }
-            
-            // Initialize AI transcription once we have the remote stream
-            initializeAiTranscription();
             
           } catch (error) {
             appendLog(`Audio setup error: ${error.message}`);
@@ -1051,6 +799,11 @@ function RealtimeConnect() {
       iceRestartTimeoutRef.current = null;
     }
     
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current);
+      notificationTimeoutRef.current = null;
+    }
+    
     // Clean up peer connection
     if (peerConnectionRef.current) {
       // Remove all event listeners
@@ -1131,16 +884,13 @@ function RealtimeConnect() {
     appendLog(`Microphone ${newMuteState ? 'unmuted' : 'muted'}`);
   };
 
-  // Add helper function for audio conversion
-  function convertFloat32ToInt16(buffer) {
-    const l = buffer.length;
-    const buf = new Int16Array(l);
-    for (let i = 0; i < l; i++) {
-      const s = Math.max(-1, Math.min(1, buffer[i]));
-      buf[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-    return buf.buffer;
-  }
+  // Add a function to handle new transcripts from the Transcription component
+  const handleTranscriptReceived = (transcript) => {
+    dispatch({
+      type: 'ADD_TRANSCRIPT',
+      payload: transcript
+    });
+  };
 
   return (
     <div className={styles.container}>
@@ -1226,31 +976,14 @@ function RealtimeConnect() {
         </div>
       )}
       
-      {/* Updated transcript panel to use state from reducer */}
-      <div className={styles.transcriptPanel}>
-        <div className={styles.transcriptHeader}>
-          <span>Transcript:</span>
-          <img src="/assets/chat.svg" alt="Transcript" width="20" height="20" />
-        </div>
-        <div className={styles.transcriptContent}>
-          {state.transcripts.map((transcript, index) => (
-            <div key={index} className={styles.transcriptEntry}>
-              <span className={styles.timestamp}>
-                {new Date(transcript.timestamp).toLocaleTimeString([], { 
-                  hour12: false,
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}:
-              </span>
-              <span className={`${styles.transcriptText} ${
-                transcript.speaker === 'AI' ? styles.aiText : styles.userText
-              }`}>
-                "{transcript.text}"
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* Replace the transcript panel with the new component */}
+      <Transcription 
+        transcripts={state.transcripts}
+        remoteMediaStream={remoteMediaStreamRef.current}
+        localStream={localStreamRef.current}
+        isCallActive={state.callActive}
+        onTranscriptReceived={handleTranscriptReceived}
+      />
 
       {/* Footer */}
       <footer className={styles.footer}>
