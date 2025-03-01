@@ -1,5 +1,5 @@
 // interview-frontend/src/components/RealtimeConnect.js
-import React, { useEffect, useState, useRef, useReducer } from "react";
+import React, { useEffect, useState, useRef, useReducer, useCallback } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import AudioVisualizer from "./AudioVisualizer";
@@ -26,6 +26,10 @@ function connectionReducer(state, action) {
       return { ...state, callDuration: action.payload };
     case 'SET_CALL_START_TIME':
       return { ...state, callStartTime: action.payload };
+    case 'SET_LAST_PONG_TIME':
+      return { ...state, lastPongTime: action.payload };
+    case 'SET_LAST_AUDIO_TIME':
+      return { ...state, lastAudioTime: action.payload };
     default:
       return state;
   }
@@ -47,6 +51,8 @@ function RealtimeConnect() {
     callStartTime: null,
     callDuration: 0,
     transcripts: [],
+    lastPongTime: null,
+    lastAudioTime: null,
     notification: {
       show: false,
       message: '',
@@ -86,6 +92,16 @@ function RealtimeConnect() {
     speaker: '',
     timestamp: ''
   });
+
+  // Add refs for heartbeat mechanism
+  const heartbeatIntervalRef = useRef(null);
+  const heartbeatTimeoutRef = useRef(null);
+  const dataChannelRef = useRef(null);
+  
+  // Define heartbeat constants
+  const HEARTBEAT_INTERVAL = 10000; // 10 seconds
+  const HEARTBEAT_TIMEOUT = 15000;  // 15 seconds
+  const AUDIO_SILENCE_THRESHOLD = 15000; // 15 seconds of silence before heartbeat
 
   // Set call info from navigation state
   useEffect(() => {
@@ -202,6 +218,86 @@ function RealtimeConnect() {
     }
   };
 
+  // Function to start the heartbeat mechanism
+  const startHeartbeat = useCallback(() => {
+    appendLog("Starting heartbeat mechanism...");
+    
+    // Clear any existing intervals/timeouts
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+    }
+    if (heartbeatTimeoutRef.current) {
+      clearTimeout(heartbeatTimeoutRef.current);
+    }
+    
+    // Set the initial audio time
+    dispatch({ type: 'SET_LAST_AUDIO_TIME', payload: Date.now() });
+    dispatch({ type: 'SET_LAST_PONG_TIME', payload: Date.now() });
+    
+    // Set up the interval to check connection health
+    heartbeatIntervalRef.current = setInterval(() => {
+      const now = Date.now();
+      const timeSinceLastAudio = now - (state.lastAudioTime || now);
+      
+      // Only send heartbeat if we haven't heard audio for the threshold period
+      if (timeSinceLastAudio > AUDIO_SILENCE_THRESHOLD && state.callActive) {
+        appendLog(`No audio for ${timeSinceLastAudio}ms, checking connection...`);
+        
+        // If we have a data channel, send a ping
+        if (dataChannelRef.current && dataChannelRef.current.readyState === 'open') {
+          try {
+            dataChannelRef.current.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+            appendLog("❤️ Heartbeat ping sent");
+          } catch (err) {
+            appendLog(`Failed to send heartbeat: ${err.message}`);
+          }
+          
+          // Check if we've received a pong recently
+          const timeSinceLastPong = now - (state.lastPongTime || now);
+          
+          if (timeSinceLastPong > HEARTBEAT_TIMEOUT) {
+            appendLog(`⚠️ No heartbeat response for ${timeSinceLastPong}ms, connection may be dead`);
+            showNotification("Connection appears to be unresponsive. Attempting to recover...", "warning");
+            
+            // Try ICE restart first
+            if (peerConnectionRef.current && peerConnectionRef.current.connectionState !== 'failed') {
+              performIceRestart();
+            } else {
+              // If ICE restart isn't possible, do a full reconnect
+              attemptReconnect();
+            }
+          }
+        }
+      }
+    }, HEARTBEAT_INTERVAL);
+  }, [state.lastAudioTime, state.lastPongTime, state.callActive]);
+  
+  // Function to handle pong messages
+  const handlePongReceived = useCallback((timestamp) => {
+    const latency = Date.now() - timestamp;
+    appendLog(`❤️ Heartbeat pong received (latency: ${latency}ms)`);
+    dispatch({ type: 'SET_LAST_PONG_TIME', payload: Date.now() });
+    
+    // Clear any pending timeout
+    if (heartbeatTimeoutRef.current) {
+      clearTimeout(heartbeatTimeoutRef.current);
+      heartbeatTimeoutRef.current = null;
+    }
+  }, []);
+  
+  // Function to stop the heartbeat
+  const stopHeartbeat = useCallback(() => {
+    appendLog("Stopping heartbeat mechanism");
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+    if (heartbeatTimeoutRef.current) {
+      clearTimeout(heartbeatTimeoutRef.current);
+      heartbeatTimeoutRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     // Auto-connect when component mounts if we have a sessionId
     if (sessionId) {
@@ -287,9 +383,12 @@ function RealtimeConnect() {
       dispatch({ type: 'SET_NETWORK_QUALITY', payload: 'unknown' });
       dispatch({ type: 'SET_MUTED', payload: false });
       
+      // Add heartbeat cleanup
+      stopHeartbeat();
+      
       appendLog("Call ended - all resources cleaned up");
     };
-  }, [sessionId]);
+  }, [sessionId, stopHeartbeat]);
 
   // Function to get color for connection state
   const getConnectionStateColor = (state) => {
@@ -581,6 +680,88 @@ function RealtimeConnect() {
       const pc = new RTCPeerConnection(configuration);
       peerConnectionRef.current = pc;
 
+      // Create a data channel for heartbeat
+      appendLog("Creating data channel for heartbeat...");
+      try {
+        const dataChannel = pc.createDataChannel("heartbeat", {
+          ordered: true,
+          maxRetransmits: 3
+        });
+        
+        dataChannel.onopen = () => {
+          appendLog("Heartbeat data channel opened");
+          dataChannelRef.current = dataChannel;
+          startHeartbeat();
+        };
+        
+        dataChannel.onclose = () => {
+          appendLog("Heartbeat data channel closed");
+          dataChannelRef.current = null;
+          stopHeartbeat();
+        };
+        
+        dataChannel.onerror = (error) => {
+          appendLog(`Heartbeat data channel error: ${error.message || "Unknown error"}`);
+        };
+        
+        dataChannel.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            if (message.type === 'pong') {
+              handlePongReceived(message.timestamp);
+            }
+          } catch (err) {
+            appendLog(`Error parsing data channel message: ${err.message}`);
+          }
+        };
+      } catch (err) {
+        appendLog(`Failed to create data channel: ${err.message}`);
+        // Continue without heartbeat if data channel creation fails
+      }
+
+      // Also handle incoming data channels (in case the remote side creates one)
+      pc.ondatachannel = (event) => {
+        appendLog(`Received data channel: ${event.channel.label}`);
+        const channel = event.channel;
+        
+        if (channel.label === "heartbeat") {
+          dataChannelRef.current = channel;
+          
+          channel.onopen = () => {
+            appendLog("Remote heartbeat data channel opened");
+            startHeartbeat();
+          };
+          
+          channel.onclose = () => {
+            appendLog("Remote heartbeat data channel closed");
+            dataChannelRef.current = null;
+            stopHeartbeat();
+          };
+          
+          channel.onerror = (error) => {
+            appendLog(`Remote heartbeat data channel error: ${error.message || "Unknown error"}`);
+          };
+          
+          channel.onmessage = (event) => {
+            try {
+              const message = JSON.parse(event.data);
+              if (message.type === 'ping') {
+                // Respond to ping with a pong
+                channel.send(JSON.stringify({ 
+                  type: 'pong', 
+                  timestamp: message.timestamp 
+                }));
+                appendLog("Responded to ping with pong");
+              } else if (message.type === 'pong') {
+                handlePongReceived(message.timestamp);
+              }
+            } catch (err) {
+              appendLog(`Error handling data channel message: ${err.message}`);
+            }
+          };
+        }
+      };
+
       // Set up connection state change handler with improved state management
       pc.onconnectionstatechange = () => {
         appendLog(`Connection state changed: ${pc.connectionState}`);
@@ -691,6 +872,49 @@ function RealtimeConnect() {
                 appendLog(`Audio play error: ${error.message}`);
               });
             }
+            
+            // Set up audio activity detection to update lastAudioTime
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(evt.streams[0]);
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            
+            // Function to detect audio activity
+            const detectAudio = () => {
+              if (!state.callActive) {
+                return;
+              }
+              
+              analyser.getByteFrequencyData(dataArray);
+              
+              // Calculate average volume
+              let sum = 0;
+              for (let i = 0; i < bufferLength; i++) {
+                sum += dataArray[i];
+              }
+              const average = sum / bufferLength;
+              
+              // If we detect audio above a threshold, update the lastAudioTime
+              if (average > 10) { // Adjust threshold as needed
+                dispatch({ type: 'SET_LAST_AUDIO_TIME', payload: Date.now() });
+              }
+              
+              // Continue checking
+              requestAnimationFrame(detectAudio);
+            };
+            
+            // Start audio detection
+            detectAudio();
+            
+            // Also update lastAudioTime when track has audio
+            evt.track.onunmute = () => {
+              appendLog("Audio track unmuted");
+              dispatch({ type: 'SET_LAST_AUDIO_TIME', payload: Date.now() });
+            };
             
           } catch (error) {
             appendLog(`Audio setup error: ${error.message}`);
@@ -866,6 +1090,15 @@ function RealtimeConnect() {
         duration: formattedDuration
       }
     });
+
+    // Stop heartbeat
+    stopHeartbeat();
+    
+    // Close data channel if open
+    if (dataChannelRef.current) {
+      dataChannelRef.current.close();
+      dataChannelRef.current = null;
+    }
   };
 
   // Update handleMuteToggle to use dispatch
